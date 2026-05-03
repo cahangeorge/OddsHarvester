@@ -92,4 +92,4 @@ class ProxyManager:
 
     def rotate_proxy(self):
         """Legacy method - no-op with single proxy configuration."""
-        self.logger.debug("Proxy rotation not supported with single proxy configuration.")
+        raise NotImplementedError("Proxy rotation is not supported yet.")

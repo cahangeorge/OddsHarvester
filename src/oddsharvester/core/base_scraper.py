@@ -136,21 +136,17 @@ class BaseScraper:
         playwright_manager: PlaywrightManager,
         browser_helper: BrowserHelper,
         market_extractor: OddsPortalMarketExtractor,
-        preview_submarkets_only: bool = False,
     ):
         """
         Args:
             playwright_manager (PlaywrightManager): Handles Playwright lifecycle.
             browser_helper (BrowserHelper): Helper class for browser interactions.
             market_extractor (OddsPortalMarketExtractor): Handles market scraping.
-            preview_submarkets_only (bool): If True, only scrape average odds from visible submarkets without loading
-            individual bookmaker details.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.playwright_manager = playwright_manager
         self.browser_helper = browser_helper
         self.market_extractor = market_extractor
-        self.preview_submarkets_only = preview_submarkets_only
 
     async def set_odds_format(self, page: Page, odds_format: OddsFormat = OddsFormat.DECIMAL_ODDS):
         """
@@ -218,6 +214,8 @@ class BaseScraper:
             List[str]: A list of unique match links found on the page.
         """
         try:
+            # TODO: page.content() serialises the full DOM which is expensive. Consider using
+            # page.locator() selectors directly to avoid BeautifulSoup re-parse overhead.
             html_content = await page.content()
             soup = BeautifulSoup(html_content, "lxml")
             event_rows = soup.find_all(class_=re.compile(OddsPortalSelectors.EVENT_ROW_CLASS_PATTERN))
@@ -522,6 +520,8 @@ class BaseScraper:
                 # If we can't find the selector, try to get the content anyway
                 self.logger.warning("React event header selector not found, attempting to parse existing content")
 
+            # TODO: page.content() serialises the full DOM which is expensive. Consider using
+            # page.locator() selectors directly to avoid BeautifulSoup re-parse overhead.
             html_content = await page.content()
             soup = BeautifulSoup(html_content, "html.parser")
             event_header_div = soup.find("div", id="react-event-header")

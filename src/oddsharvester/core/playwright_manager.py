@@ -32,6 +32,7 @@ class PlaywrightManager:
         self.playwright = None
         self.browser = None
         self.context = None
+        # TODO: implement crash recovery — add health-check heartbeat + auto-restart
         self.page = None
         self.timezone_id: str | None = None
 

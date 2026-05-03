@@ -208,8 +208,8 @@ async def run_scraper(
             raise ValueError(f"Unknown command: {command}. Supported commands are 'upcoming-matches' and 'historic'.")
 
     except Exception as e:
-        logger.error(f"An error occured: {e}")
-        return None
+        logger.error(f"An error occurred: {e}", exc_info=True)
+        raise  # Re-raise so CLI can surface the actual error to user
 
     finally:
         await scraper.stop_playwright()

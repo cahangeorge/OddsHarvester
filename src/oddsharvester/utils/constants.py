@@ -40,8 +40,8 @@ SCROLL_UNTIL_CLICK_TIMEOUT_S = 20
 SCROLL_UNTIL_CLICK_PAUSE_S = 3
 
 # Page collection delays (ms)
-PAGE_COLLECTION_DELAY_MIN_MS = 6000
-PAGE_COLLECTION_DELAY_MAX_MS = 8000
+PAGE_COLLECTION_DELAY_MIN_MS = 2000
+PAGE_COLLECTION_DELAY_MAX_MS = 3000
 
 # =============================================================================
 # PAGINATION CONSTANTS
@@ -68,7 +68,7 @@ MATCH_RETRY_MAX_DELAY = 30.0
 # =============================================================================
 
 DEFAULT_REQUEST_DELAY_S = 1.0
-REQUEST_DELAY_JITTER_FACTOR = 0.5
+REQUEST_DELAY_JITTER_FACTOR = 0.3
 
 PLAYWRIGHT_BROWSER_ARGS = [
     "--disable-background-networking",

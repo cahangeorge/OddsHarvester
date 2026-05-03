@@ -203,6 +203,8 @@ class OddsPortalMarketExtractor:
                         return []
 
                     await self.navigation_manager.wait_for_page_load(page)
+                    # TODO: page.content() serialises the full DOM which is expensive. Consider using
+                    # page.locator() selectors directly to avoid BeautifulSoup re-parse overhead.
                     html_content = await page.content()
 
                     odds_data = self.odds_parser.parse_market_odds(
@@ -220,6 +222,8 @@ class OddsPortalMarketExtractor:
                     return []
 
                 await self.navigation_manager.wait_for_page_load(page)
+                # TODO: page.content() serialises the full DOM which is expensive. Consider using
+                # page.locator() selectors directly to avoid BeautifulSoup re-parse overhead.
                 html_content = await page.content()
 
                 odds_data = self.odds_parser.parse_market_odds(

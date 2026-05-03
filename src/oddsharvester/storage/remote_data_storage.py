@@ -5,8 +5,8 @@ from typing import Any
 
 import boto3
 
-_DEFAULT_S3_BUCKET = "odds-portal-scrapped-odds-cad8822c179f12cg"
-_DEFAULT_AWS_REGION = "eu-west-3"
+_DEFAULT_S3_BUCKET = ""  # Must be configured via OH_S3_BUCKET env var
+_DEFAULT_AWS_REGION = ""  # Must be configured via OH_AWS_REGION env var
 
 
 class RemoteDataStorage:

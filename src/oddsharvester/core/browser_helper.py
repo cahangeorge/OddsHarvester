@@ -685,7 +685,8 @@ class BrowserHelper:
                     self.logger.debug(f"Exception checking active selector '{selector}': {e}")
                     continue
 
-            # Alternative: check if the market name appears in the current URL or page content
+            # TODO: page.content() serialises the full DOM; replace with page.text_content()
+            # on the specific tab element for better performance.
             page_content = await page.content()
             if market_tab_name and market_tab_name.lower() in page_content.lower():
                 self.logger.info(f"Market '{market_tab_name}' found in page content")

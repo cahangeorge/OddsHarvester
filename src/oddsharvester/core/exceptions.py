@@ -21,6 +21,7 @@ class ScraperError(Exception):
         return self.message
 
 
+# Ready for use; not raised yet.
 class NavigationError(ScraperError):
     """
     Error during page navigation.
@@ -33,6 +34,7 @@ class NavigationError(ScraperError):
         super().__init__(message, url, is_retryable=True)
 
 
+# Ready for use; not raised yet.
 class ParsingError(ScraperError):
     """
     Error parsing page content.
@@ -45,6 +47,7 @@ class ParsingError(ScraperError):
         super().__init__(message, url, is_retryable=False)
 
 
+# Ready for use; not raised yet.
 class RateLimitError(ScraperError):
     """
     Rate limiting detected.
@@ -58,6 +61,7 @@ class RateLimitError(ScraperError):
         self.retry_after = retry_after
 
 
+# Ready for use; not raised yet.
 class PageNotFoundError(ScraperError):
     """
     Page not found (404) or unavailable.
@@ -70,6 +74,7 @@ class PageNotFoundError(ScraperError):
         super().__init__(message, url, is_retryable=False)
 
 
+# Ready for use; not raised yet.
 class PartialDataError(ScraperError):
     """
     Partial data was retrieved.
@@ -83,6 +88,7 @@ class PartialDataError(ScraperError):
         self.partial_data = partial_data
 
 
+# Ready for use; not raised yet.
 class MarketExtractionError(ScraperError):
     """
     Error extracting market data.

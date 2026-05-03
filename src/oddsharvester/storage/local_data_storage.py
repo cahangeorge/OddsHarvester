@@ -77,6 +77,7 @@ class LocalDataStorage:
                 if os.path.getsize(file_path) == 0:
                     writer.writeheader()
 
+                # TODO: implement deduplication of scrape results before appending
                 writer.writerows(data)
 
             self.logger.info(f"Successfully saved {len(data)} record(s) to {file_path}")

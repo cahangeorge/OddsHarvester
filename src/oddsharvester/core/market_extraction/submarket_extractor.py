@@ -93,6 +93,8 @@ class SubmarketExtractor:
 
         try:
             await page.wait_for_timeout(SCROLL_PAUSE_TIME_MS)
+            # TODO: page.content() serialises the full DOM which is expensive. Consider using
+            # page.locator() selectors directly to avoid BeautifulSoup re-parse overhead.
             html_content = await page.content()
             if not isinstance(html_content, str):
                 html_content = ""
