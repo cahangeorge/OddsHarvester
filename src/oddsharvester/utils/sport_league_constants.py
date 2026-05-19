@@ -340,4 +340,25 @@ SPORTS_LEAGUES_URLS_MAPPING = {
         "nfl": "https://www.oddsportal.com/american-football/usa/nfl/",
         "ncaa": "https://www.oddsportal.com/american-football/usa/ncaa/",
     },
+    Sport.HANDBALL: {
+        "ehf-champions-league": "https://www.oddsportal.com/handball/europe/champions-league/",
+        "ehf-european-league": "https://www.oddsportal.com/handball/europe/european-league/",
+        "germany-bundesliga": "https://www.oddsportal.com/handball/germany/bundesliga/",
+        "france-lnh": "https://www.oddsportal.com/handball/france/starligue/",
+        "spain-liga-asobal": "https://www.oddsportal.com/handball/spain/liga-asobal/",
+        "denmark-handboldligaen": "https://www.oddsportal.com/handball/denmark/herre-handbold-ligaen/",
+        "hungary-nb-i": "https://www.oddsportal.com/handball/hungary/nb-i/",
+    },
+    Sport.VOLLEYBALL: {
+        # russia-superliga intentionally omitted: live validation returned no match data (post-2022)
+        "italy-superlega": "https://www.oddsportal.com/volleyball/italy/superlega/",
+        "poland-plusliga": "https://www.oddsportal.com/volleyball/poland/plusliga/",
+        "france-ligue-a": "https://www.oddsportal.com/volleyball/france/ligue-a/",
+        "germany-1-bundesliga": "https://www.oddsportal.com/volleyball/germany/1-bundesliga/",
+        "turkey-efeler-ligi": "https://www.oddsportal.com/volleyball/turkey/efeler-ligi/",
+        "brazil-superliga": "https://www.oddsportal.com/volleyball/brazil/superliga/",
+        "japan-sv-league": "https://www.oddsportal.com/volleyball/japan/sv-league/",
+        "cev-champions-league": "https://www.oddsportal.com/volleyball/europe/champions-league/",
+        "nations-league": "https://www.oddsportal.com/volleyball/world/nations-league/",
+    },
 }

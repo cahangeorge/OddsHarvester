@@ -244,3 +244,68 @@ class BaseballPeriod(Enum):
             cls.FIRST_HALF: "FirstHalf",
         }
         return internal_values[period]
+
+
+class HandballPeriod(Enum):
+    """Periods available for handball matches."""
+
+    FULL_TIME = "full_time"
+    FIRST_HALF = "1st_half"
+    SECOND_HALF = "2nd_half"
+
+    @classmethod
+    def get_display_label(cls, period: "HandballPeriod") -> str:
+        """Get the display label for OddsPortal UI."""
+        labels = {
+            cls.FULL_TIME: "Full Time",
+            cls.FIRST_HALF: "1st Half",
+            cls.SECOND_HALF: "2nd Half",
+        }
+        return labels[period]
+
+    @classmethod
+    def get_internal_value(cls, period: "HandballPeriod") -> str:
+        """Get the internal value used in scraper functions."""
+        internal_values = {
+            cls.FULL_TIME: "FullTime",
+            cls.FIRST_HALF: "FirstHalf",
+            cls.SECOND_HALF: "SecondHalf",
+        }
+        return internal_values[period]
+
+
+class VolleyballPeriod(Enum):
+    """Periods available for volleyball matches (best-of-5 sets)."""
+
+    FULL_TIME = "full_time"
+    FIRST_SET = "1st_set"
+    SECOND_SET = "2nd_set"
+    THIRD_SET = "3rd_set"
+    FOURTH_SET = "4th_set"
+    FIFTH_SET = "5th_set"
+
+    @classmethod
+    def get_display_label(cls, period: "VolleyballPeriod") -> str:
+        """Get the display label for OddsPortal UI."""
+        labels = {
+            cls.FULL_TIME: "Full Time",
+            cls.FIRST_SET: "1st Set",
+            cls.SECOND_SET: "2nd Set",
+            cls.THIRD_SET: "3rd Set",
+            cls.FOURTH_SET: "4th Set",
+            cls.FIFTH_SET: "5th Set",
+        }
+        return labels[period]
+
+    @classmethod
+    def get_internal_value(cls, period: "VolleyballPeriod") -> str:
+        """Get the internal value used in scraper functions."""
+        internal_values = {
+            cls.FULL_TIME: "FullTime",
+            cls.FIRST_SET: "FirstSet",
+            cls.SECOND_SET: "SecondSet",
+            cls.THIRD_SET: "ThirdSet",
+            cls.FOURTH_SET: "FourthSet",
+            cls.FIFTH_SET: "FifthSet",
+        }
+        return internal_values[period]

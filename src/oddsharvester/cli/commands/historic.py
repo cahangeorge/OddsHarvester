@@ -56,6 +56,7 @@ def historic(ctx, **kwargs):
                 browser_user_agent=kwargs.get("browser_user_agent"),
                 browser_locale_timezone=kwargs.get("browser_locale_timezone"),
                 browser_timezone_id=kwargs.get("browser_timezone_id"),
+                base_url=kwargs.get("base_url"),
                 target_bookmaker=kwargs.get("target_bookmaker"),
                 scrape_odds_history=kwargs.get("scrape_odds_history", False),
                 headless=kwargs.get("headless", False),
@@ -63,6 +64,7 @@ def historic(ctx, **kwargs):
                 bookies_filter=bookies_filter.value if bookies_filter else "all",
                 period=kwargs.get("period"),
                 request_delay=kwargs.get("request_delay", 1.0),
+                concurrency_tasks=kwargs.get("concurrency_tasks", 3),
             )
         )
 

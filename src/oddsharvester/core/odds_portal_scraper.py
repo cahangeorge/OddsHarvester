@@ -77,6 +77,7 @@ class OddsPortalScraper(BaseScraper):
         bookies_filter: BookiesFilter = BookiesFilter.ALL,
         period: Enum | None = None,
         request_delay: float = DEFAULT_REQUEST_DELAY_S,
+        concurrent_scraping_task: int = 3,
     ) -> ScrapeResult:
         """
         Scrapes historical odds data.
@@ -97,7 +98,9 @@ class OddsPortalScraper(BaseScraper):
         if not current_page:
             raise RuntimeError("Playwright has not been initialized. Call `start_playwright()` first.")
 
-        base_url = URLBuilder.get_historic_matches_url(sport=sport, league=league, season=season)
+        base_url = URLBuilder.get_historic_matches_url(
+            sport=sport, league=league, season=season, base_url=self.base_url
+        )
         self.logger.info(f"Starting historic scraping for {sport} - {league} - {season}")
         self.logger.info(f"Base URL: {base_url}")
         self.logger.info(f"Max pages parameter: {max_pages}")
@@ -128,6 +131,7 @@ class OddsPortalScraper(BaseScraper):
             markets=markets,
             scrape_odds_history=scrape_odds_history,
             target_bookmaker=target_bookmaker,
+            concurrent_scraping_task=concurrent_scraping_task,
             preview_submarkets_only=self.preview_submarkets_only,
             bookies_filter=bookies_filter,
             period=period,
@@ -145,6 +149,7 @@ class OddsPortalScraper(BaseScraper):
         bookies_filter: BookiesFilter = BookiesFilter.ALL,
         period: Enum | None = None,
         request_delay: float = DEFAULT_REQUEST_DELAY_S,
+        concurrent_scraping_task: int = 3,
     ) -> ScrapeResult:
         """
         Scrapes upcoming match odds.
@@ -164,7 +169,7 @@ class OddsPortalScraper(BaseScraper):
         if not current_page:
             raise RuntimeError("Playwright has not been initialized. Call `start_playwright()` first.")
 
-        url = URLBuilder.get_upcoming_matches_url(sport=sport, date=date, league=league)
+        url = URLBuilder.get_upcoming_matches_url(sport=sport, date=date, league=league, base_url=self.base_url)
         self.logger.info(f"Fetching upcoming odds from {url}")
 
         await current_page.goto(url, timeout=GOTO_TIMEOUT_MS, wait_until="domcontentloaded")
@@ -172,7 +177,7 @@ class OddsPortalScraper(BaseScraper):
 
         # Scroll to load all matches due to lazy loading
         self.logger.info("Scrolling page to load all upcoming matches...")
-        await self.browser_helper.scroll_until_loaded(
+        await self.scroller.scroll_until_loaded(
             page=current_page,
             timeout=30,
             scroll_pause_time=2,
@@ -202,6 +207,7 @@ class OddsPortalScraper(BaseScraper):
             markets=markets,
             scrape_odds_history=scrape_odds_history,
             target_bookmaker=target_bookmaker,
+            concurrent_scraping_task=concurrent_scraping_task,
             preview_submarkets_only=self.preview_submarkets_only,
             bookies_filter=bookies_filter,
             period=period,
@@ -218,6 +224,7 @@ class OddsPortalScraper(BaseScraper):
         bookies_filter: BookiesFilter = BookiesFilter.ALL,
         period: Enum | None = None,
         request_delay: float = DEFAULT_REQUEST_DELAY_S,
+        concurrent_scraping_task: int = 3,
     ) -> ScrapeResult:
         """
         Scrapes match odds from a list of specific match URLs.
@@ -244,7 +251,7 @@ class OddsPortalScraper(BaseScraper):
             markets=markets,
             scrape_odds_history=scrape_odds_history,
             target_bookmaker=target_bookmaker,
-            concurrent_scraping_task=len(match_links),
+            concurrent_scraping_task=concurrent_scraping_task,
             preview_submarkets_only=self.preview_submarkets_only,
             bookies_filter=bookies_filter,
             period=period,
@@ -259,7 +266,7 @@ class OddsPortalScraper(BaseScraper):
             page: Playwright page instance.
         """
         await self.set_odds_format(page=page)
-        await self.browser_helper.dismiss_cookie_banner(page=page)
+        await self.cookie_dismisser.dismiss(page=page)
 
     async def _get_pagination_info(self, page: Page, max_pages: int | None) -> list[int]:
         """
@@ -374,7 +381,7 @@ class OddsPortalScraper(BaseScraper):
                 await tab.wait_for_timeout(delay)
 
                 self.logger.info(f"Scrolling page {page_number} to load all matches...")
-                scroll_success = await self.browser_helper.scroll_until_loaded(
+                scroll_success = await self.scroller.scroll_until_loaded(
                     page=tab,
                     timeout=30,
                     scroll_pause_time=2,

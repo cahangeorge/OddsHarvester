@@ -3,7 +3,6 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from oddsharvester.core.browser_helper import BrowserHelper
 from oddsharvester.core.odds_portal_market_extractor import OddsPortalMarketExtractor
 from oddsharvester.core.odds_portal_scraper import OddsPortalScraper
 from oddsharvester.core.playwright_manager import PlaywrightManager
@@ -18,7 +17,6 @@ from oddsharvester.utils.constants import OPERATION_RETRY_MAX_ATTEMPTS
 def setup_mocks():
     """Set up common mocks for tests."""
     playwright_manager_mock = MagicMock(spec=PlaywrightManager)
-    browser_helper_mock = MagicMock(spec=BrowserHelper)
     market_extractor_mock = MagicMock(spec=OddsPortalMarketExtractor)
     scraper_mock = MagicMock(spec=OddsPortalScraper)
 
@@ -31,7 +29,6 @@ def setup_mocks():
 
     return {
         "playwright_manager_mock": playwright_manager_mock,
-        "browser_helper_mock": browser_helper_mock,
         "market_extractor_mock": market_extractor_mock,
         "scraper_mock": scraper_mock,
     }
@@ -40,7 +37,6 @@ def setup_mocks():
 @pytest.mark.asyncio
 @patch("oddsharvester.core.scraper_app.OddsPortalScraper")
 @patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
-@patch("oddsharvester.core.scraper_app.BrowserHelper")
 @patch("oddsharvester.core.scraper_app.PlaywrightManager")
 @patch("oddsharvester.core.scraper_app.ProxyManager")
 @patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
@@ -48,7 +44,6 @@ async def test_run_scraper_historic(
     sport_market_registrar_mock,
     proxy_manager_mock,
     playwright_manager_mock,
-    browser_helper_mock,
     market_extractor_mock,
     scraper_cls_mock,
     setup_mocks,
@@ -92,6 +87,7 @@ async def test_run_scraper_historic(
         bookies_filter=ANY,
         period=ANY,
         request_delay=ANY,
+        concurrent_scraping_task=ANY,
     )
 
     scraper_mock.stop_playwright.assert_called_once()
@@ -101,7 +97,6 @@ async def test_run_scraper_historic(
 @pytest.mark.asyncio
 @patch("oddsharvester.core.scraper_app.OddsPortalScraper")
 @patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
-@patch("oddsharvester.core.scraper_app.BrowserHelper")
 @patch("oddsharvester.core.scraper_app.PlaywrightManager")
 @patch("oddsharvester.core.scraper_app.ProxyManager")
 @patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
@@ -109,7 +104,6 @@ async def test_run_scraper_upcoming(
     sport_market_registrar_mock,
     proxy_manager_mock,
     playwright_manager_mock,
-    browser_helper_mock,
     market_extractor_mock,
     scraper_cls_mock,
     setup_mocks,
@@ -152,6 +146,7 @@ async def test_run_scraper_upcoming(
         bookies_filter=ANY,
         period=ANY,
         request_delay=ANY,
+        concurrent_scraping_task=ANY,
     )
 
     assert result == {"result": "upcoming_data"}
@@ -160,7 +155,6 @@ async def test_run_scraper_upcoming(
 @pytest.mark.asyncio
 @patch("oddsharvester.core.scraper_app.OddsPortalScraper")
 @patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
-@patch("oddsharvester.core.scraper_app.BrowserHelper")
 @patch("oddsharvester.core.scraper_app.PlaywrightManager")
 @patch("oddsharvester.core.scraper_app.ProxyManager")
 @patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
@@ -168,7 +162,6 @@ async def test_run_scraper_match_links(
     sport_market_registrar_mock,
     proxy_manager_mock,
     playwright_manager_mock,
-    browser_helper_mock,
     market_extractor_mock,
     scraper_cls_mock,
     setup_mocks,
@@ -201,9 +194,102 @@ async def test_run_scraper_match_links(
         bookies_filter=ANY,
         period=ANY,
         request_delay=ANY,
+        concurrent_scraping_task=ANY,
     )
 
     assert result == {"result": "match_data"}
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_run_scraper_upcoming_forwards_concurrency(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    setup_mocks,
+):
+    """run_scraper(concurrency_tasks=N) must forward concurrent_scraping_task=N to scrape_upcoming (issue #64)."""
+    scraper_mock = setup_mocks["scraper_mock"]
+    scraper_cls_mock.return_value = scraper_mock
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+
+    await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        sport="football",
+        date="20260601",
+        leagues=["premier-league"],
+        markets=["1x2"],
+        concurrency_tasks=10,
+    )
+
+    assert scraper_mock.scrape_upcoming.call_args.kwargs.get("concurrent_scraping_task") == 10
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_run_scraper_historic_forwards_concurrency(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    setup_mocks,
+):
+    """run_scraper(concurrency_tasks=N) must forward concurrent_scraping_task=N to scrape_historic (issue #64)."""
+    scraper_mock = setup_mocks["scraper_mock"]
+    scraper_cls_mock.return_value = scraper_mock
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+
+    await run_scraper(
+        command=CommandEnum.HISTORIC,
+        sport="football",
+        leagues=["premier-league"],
+        season="2024",
+        markets=["1x2"],
+        concurrency_tasks=7,
+    )
+
+    assert scraper_mock.scrape_historic.call_args.kwargs.get("concurrent_scraping_task") == 7
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_run_scraper_match_links_forwards_concurrency(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    setup_mocks,
+):
+    """run_scraper(concurrency_tasks=N) must forward concurrent_scraping_task=N to scrape_matches (issue #64)."""
+    scraper_mock = setup_mocks["scraper_mock"]
+    scraper_cls_mock.return_value = scraper_mock
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+
+    await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        match_links=["https://oddsportal.com/m1", "https://oddsportal.com/m2"],
+        sport="tennis",
+        markets=["1x2"],
+        concurrency_tasks=5,
+    )
+
+    assert scraper_mock.scrape_matches.call_args.kwargs.get("concurrent_scraping_task") == 5
 
 
 @pytest.mark.asyncio
@@ -407,7 +493,6 @@ async def test_run_scraper_multiple_leagues_historic():
     with (
         patch("oddsharvester.core.scraper_app.OddsPortalScraper") as scraper_cls_mock,
         patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor"),
-        patch("oddsharvester.core.scraper_app.BrowserHelper"),
         patch("oddsharvester.core.scraper_app.PlaywrightManager"),
         patch("oddsharvester.core.scraper_app.ProxyManager"),
         patch("oddsharvester.core.scraper_app.SportMarketRegistrar"),

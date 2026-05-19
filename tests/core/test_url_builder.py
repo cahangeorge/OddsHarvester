@@ -1,6 +1,6 @@
 import pytest
 
-from oddsharvester.core.url_builder import URLBuilder
+from oddsharvester.core.url_builder import URLBuilder, rebase_url
 from oddsharvester.utils.constants import ODDSPORTAL_BASE_URL
 from oddsharvester.utils.sport_league_constants import SPORTS_LEAGUES_URLS_MAPPING
 from oddsharvester.utils.sport_market_constants import Sport
@@ -26,6 +26,12 @@ SPORTS_LEAGUES_URLS_MAPPING[Sport.BASEBALL] = {
 SPORTS_LEAGUES_URLS_MAPPING[Sport.AMERICAN_FOOTBALL] = {
     "nfl": f"{ODDSPORTAL_BASE_URL}/american-football/usa/nfl",
     "ncaa": f"{ODDSPORTAL_BASE_URL}/american-football/usa/ncaa",
+}
+SPORTS_LEAGUES_URLS_MAPPING[Sport.HANDBALL] = {
+    "ehf-champions-league": f"{ODDSPORTAL_BASE_URL}/handball/europe/champions-league",
+}
+SPORTS_LEAGUES_URLS_MAPPING[Sport.VOLLEYBALL] = {
+    "italy-superlega": f"{ODDSPORTAL_BASE_URL}/volleyball/italy/superlega",
 }
 
 
@@ -165,8 +171,8 @@ def test_get_historic_matches_url_invalid_season_range(sport, league, season, er
 
 def test_get_historic_matches_url_invalid_sport():
     """Test error handling for invalid sports."""
-    with pytest.raises(ValueError, match="'handball' is not a valid Sport"):
-        URLBuilder.get_historic_matches_url("handball", "champions-league", "2023-2024")
+    with pytest.raises(ValueError, match="'cricket' is not a valid Sport"):
+        URLBuilder.get_historic_matches_url("cricket", "champions-league", "2023-2024")
 
 
 def test_get_historic_matches_url_invalid_league():
@@ -209,6 +215,8 @@ def test_get_upcoming_matches_url(sport, date, league, expected_url):
         ("tennis", "atp-tour", f"{ODDSPORTAL_BASE_URL}/tennis/atp-tour"),
         ("baseball", "mlb", f"{ODDSPORTAL_BASE_URL}/baseball/usa/mlb"),
         ("american-football", "nfl", f"{ODDSPORTAL_BASE_URL}/american-football/usa/nfl"),
+        ("handball", "ehf-champions-league", f"{ODDSPORTAL_BASE_URL}/handball/europe/champions-league"),
+        ("volleyball", "italy-superlega", f"{ODDSPORTAL_BASE_URL}/volleyball/italy/superlega"),
     ],
 )
 def test_get_league_url(sport, league, expected_url):
@@ -340,8 +348,8 @@ def test_get_historic_matches_url_with_league_aliases(sport, league, season, exp
 
 def test_get_league_url_invalid_sport():
     """Test get_league_url raises ValueError for unsupported sport."""
-    with pytest.raises(ValueError, match="'handball' is not a valid Sport"):
-        URLBuilder.get_league_url("handball", "champions-league")
+    with pytest.raises(ValueError, match="'cricket' is not a valid Sport"):
+        URLBuilder.get_league_url("cricket", "champions-league")
 
 
 def test_get_league_url_invalid_league():
@@ -351,3 +359,77 @@ def test_get_league_url_invalid_league():
         match=r"Invalid league 'random-league' for sport 'football'\. Available: england-premier-league, la-liga",
     ):
         URLBuilder.get_league_url("football", "random-league")
+
+
+class TestRebaseUrl:
+    def test_none_base_url_returns_unchanged(self):
+        url = "https://www.oddsportal.com/football/england/premier-league/results/"
+        assert rebase_url(url, None) == url
+
+    def test_empty_base_url_returns_unchanged(self):
+        url = "https://www.oddsportal.com/football/england/premier-league/results/"
+        assert rebase_url(url, "") == url
+
+    def test_swaps_scheme_and_host_preserving_path_query_fragment(self):
+        url = "https://www.oddsportal.com/football/italy/serie-a/results/?foo=1#bar"
+        assert rebase_url(url, "https://www.centroquote.it") == (
+            "https://www.centroquote.it/football/italy/serie-a/results/?foo=1#bar"
+        )
+
+    def test_preserves_http_scheme_from_base_url(self):
+        url = "https://www.oddsportal.com/tennis/atp-tour/"
+        assert rebase_url(url, "http://mirror.example.com") == "http://mirror.example.com/tennis/atp-tour/"
+
+    def test_trailing_slash_on_base_url_does_not_double(self):
+        url = "https://www.oddsportal.com/football/spain/laliga"
+        assert rebase_url(url, "https://www.centroquote.it/") == "https://www.centroquote.it/football/spain/laliga"
+
+    def test_idempotent(self):
+        url = "https://www.oddsportal.com/football/france/ligue-1/results/"
+        once = rebase_url(url, "https://www.centroquote.it")
+        assert rebase_url(once, "https://www.centroquote.it") == once
+
+
+class TestUrlBuilderBaseUrl:
+    BASE = "https://www.centroquote.it"
+
+    def test_get_league_url_default_unchanged(self):
+        url = URLBuilder.get_league_url("football", "england-premier-league")
+        assert url.startswith("https://www.oddsportal.com/")
+
+    def test_get_league_url_rebased(self):
+        url = URLBuilder.get_league_url("football", "england-premier-league", base_url=self.BASE)
+        assert url == f"{self.BASE}/football/england/premier-league"
+
+    def test_get_historic_matches_url_rebased_with_season(self):
+        url = URLBuilder.get_historic_matches_url(
+            sport="football", league="england-premier-league", season="2021-2022", base_url=self.BASE
+        )
+        assert url == f"{self.BASE}/football/england/premier-league-2021-2022/results/"
+
+    def test_get_historic_matches_url_rebased_current_season(self):
+        url = URLBuilder.get_historic_matches_url(
+            sport="football", league="england-premier-league", season="current", base_url=self.BASE
+        )
+        assert url == f"{self.BASE}/football/england/premier-league/results/"
+
+    def test_get_historic_matches_url_baseball_special_case_rebased(self):
+        url = URLBuilder.get_historic_matches_url(
+            sport="baseball", league="mlb", season="2022-2023", base_url=self.BASE
+        )
+        assert url == f"{self.BASE}/baseball/usa/mlb-2022/results/"
+
+    def test_get_upcoming_matches_url_no_league_rebased(self):
+        url = URLBuilder.get_upcoming_matches_url(sport="football", date="2025-01-15", base_url=self.BASE)
+        assert url == f"{self.BASE}/matches/football/2025-01-15/"
+
+    def test_get_upcoming_matches_url_with_league_rebased(self):
+        url = URLBuilder.get_upcoming_matches_url(
+            sport="football", date="2025-01-15", league="england-premier-league", base_url=self.BASE
+        )
+        assert url == f"{self.BASE}/football/england/premier-league"
+
+    def test_default_calls_have_no_regression(self):
+        assert URLBuilder.get_upcoming_matches_url(sport="football", date="2025-01-15").startswith(
+            "https://www.oddsportal.com/"
+        )

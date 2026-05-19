@@ -33,5 +33,75 @@
             }
         ],
         "over_under_sets_2_5_market": []
+    },
+    {
+        "scraped_date": "2026-04-28 13:48:30 UTC",
+        "match_date": "2026-01-30 10:25:00 UTC",
+        "match_link": "https://www.oddsportal.com/tennis/australia/atp-australian-open-2024/djokovic-novak-sinner-jannik-IwSMNP62/",
+        "home_team": "Djokovic N.",
+        "away_team": "Sinner J.",
+        "league_name": "ATP Australian Open",
+        "home_score": "3",
+        "away_score": "2",
+        "partial_results": "3:6, 6:3, 4:6, 6:4, 6:4",
+        "venue": "Rod Laver Arena",
+        "venue_town": "Melbourne",
+        "venue_country": "Australia",
+        "match_winner_market": [
+            {
+                "player_1": "1.52",
+                "player_2": "2.67",
+                "bookmaker_name": "Betclic.fr",
+                "period": "FullTime"
+            },
+            {
+                "player_1": "1.45",
+                "player_2": "2.50",
+                "bookmaker_name": "bwin.fr",
+                "period": "FullTime"
+            },
+            {
+                "player_1": "1.52",
+                "player_2": "2.65",
+                "bookmaker_name": "Unibet.fr",
+                "period": "FullTime"
+            }
+        ],
+        "over_under_sets_2_5_market": []
+    },
+    {
+        "scraped_date": "2026-04-28 14:18:46 UTC",
+        "match_date": "2026-01-30 10:25:00 UTC",
+        "match_link": "https://www.oddsportal.com/tennis/australia/atp-australian-open-2024/djokovic-novak-sinner-jannik-IwSMNP62/",
+        "home_team": "Djokovic N.",
+        "away_team": "Sinner J.",
+        "league_name": "ATP Australian Open",
+        "home_score": "3",
+        "away_score": "2",
+        "partial_results": "3:6, 6:3, 4:6, 6:4, 6:4",
+        "venue": "Rod Laver Arena",
+        "venue_town": "Melbourne",
+        "venue_country": "Australia",
+        "match_winner_market": [
+            {
+                "player_1": "1.52",
+                "player_2": "2.67",
+                "bookmaker_name": "Betclic.fr",
+                "period": "FullTime"
+            },
+            {
+                "player_1": "1.45",
+                "player_2": "2.50",
+                "bookmaker_name": "bwin.fr",
+                "period": "FullTime"
+            },
+            {
+                "player_1": "1.52",
+                "player_2": "2.65",
+                "bookmaker_name": "Unibet.fr",
+                "period": "FullTime"
+            }
+        ],
+        "over_under_sets_2_5_market": []
     }
 ]

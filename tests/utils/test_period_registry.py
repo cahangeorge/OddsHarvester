@@ -4,10 +4,12 @@ from oddsharvester.utils.period_constants import (
     BaseballPeriod,
     BasketballPeriod,
     FootballPeriod,
+    HandballPeriod,
     IceHockeyPeriod,
     RugbyLeaguePeriod,
     RugbyUnionPeriod,
     TennisPeriod,
+    VolleyballPeriod,
 )
 
 
@@ -62,6 +64,18 @@ class TestSportPeriodRegistry:
         assert SportPeriodRegistry.get_period_enum("baseball") == BaseballPeriod
         assert SportPeriodRegistry.get_default_period("baseball") == BaseballPeriod.FULL_INCLUDING_OT
 
+    def test_handball_is_registered(self):
+        """Test that handball is auto-registered."""
+        assert SportPeriodRegistry.is_sport_registered("handball")
+        assert SportPeriodRegistry.get_period_enum("handball") == HandballPeriod
+        assert SportPeriodRegistry.get_default_period("handball") == HandballPeriod.FULL_TIME
+
+    def test_volleyball_is_registered(self):
+        """Test that volleyball is auto-registered."""
+        assert SportPeriodRegistry.is_sport_registered("volleyball")
+        assert SportPeriodRegistry.get_period_enum("volleyball") == VolleyballPeriod
+        assert SportPeriodRegistry.get_default_period("volleyball") == VolleyballPeriod.FULL_TIME
+
     def test_all_sports_registered(self):
         """Test that all sports are auto-registered."""
         assert SportPeriodRegistry.is_sport_registered("football")
@@ -72,6 +86,7 @@ class TestSportPeriodRegistry:
         assert SportPeriodRegistry.is_sport_registered("american-football")
         assert SportPeriodRegistry.is_sport_registered("ice-hockey")
         assert SportPeriodRegistry.is_sport_registered("baseball")
+        assert SportPeriodRegistry.is_sport_registered("volleyball")
 
     def test_football_cli_values(self):
         """Test that football has the correct CLI values."""
@@ -188,6 +203,18 @@ class TestSportPeriodRegistryConversion:
         )
         assert SportPeriodRegistry.from_internal_value("FullTime", "baseball") == BaseballPeriod.FULL_TIME
         assert SportPeriodRegistry.from_internal_value("FirstHalf", "baseball") == BaseballPeriod.FIRST_HALF
+
+    def test_from_internal_value_handball(self):
+        """Test converting internal values to handball enum."""
+        assert SportPeriodRegistry.from_internal_value("FullTime", "handball") == HandballPeriod.FULL_TIME
+        assert SportPeriodRegistry.from_internal_value("FirstHalf", "handball") == HandballPeriod.FIRST_HALF
+        assert SportPeriodRegistry.from_internal_value("SecondHalf", "handball") == HandballPeriod.SECOND_HALF
+
+    def test_from_internal_value_volleyball(self):
+        """Test converting internal values to volleyball enum."""
+        assert SportPeriodRegistry.from_internal_value("FullTime", "volleyball") == VolleyballPeriod.FULL_TIME
+        assert SportPeriodRegistry.from_internal_value("FirstSet", "volleyball") == VolleyballPeriod.FIRST_SET
+        assert SportPeriodRegistry.from_internal_value("FifthSet", "volleyball") == VolleyballPeriod.FIFTH_SET
 
     def test_from_internal_value_invalid(self):
         """Test that invalid internal values return None."""

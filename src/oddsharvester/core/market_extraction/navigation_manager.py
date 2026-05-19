@@ -2,21 +2,23 @@ import logging
 
 from playwright.async_api import Page
 
-from oddsharvester.core.browser_helper import BrowserHelper
+from oddsharvester.core.browser.market_navigation import MarketTabNavigator
+from oddsharvester.core.browser.scrolling import PageScroller
 from oddsharvester.utils.constants import DEFAULT_MARKET_TIMEOUT_MS, MARKET_SWITCH_WAIT_TIME_MS, SCROLL_PAUSE_TIME_MS
 
 
 class NavigationManager:
     """Handles browser navigation for market extraction."""
 
-    def __init__(self, browser_helper: BrowserHelper):
+    def __init__(self, tab_navigator: MarketTabNavigator, scroller: PageScroller):
         """Initialize NavigationManager."""
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.browser_helper = browser_helper
+        self.tab_navigator = tab_navigator
+        self.scroller = scroller
 
     async def navigate_to_market_tab(self, page: Page, market_tab_name: str) -> bool:
         """Navigate to a specific market tab."""
-        return await self.browser_helper.navigate_to_market_tab(
+        return await self.tab_navigator.navigate_to_tab(
             page=page, market_tab_name=market_tab_name, timeout=DEFAULT_MARKET_TIMEOUT_MS
         )
 
@@ -55,7 +57,7 @@ class NavigationManager:
 
     async def select_specific_market(self, page: Page, specific_market: str) -> bool:
         """Select a specific submarket within the main market."""
-        return await self.browser_helper.scroll_until_visible_and_click_parent(
+        return await self.scroller.scroll_until_visible_and_click_parent(
             page=page,
             selector="div.flex.w-full.items-center.justify-start.pl-3.font-bold p",
             text=specific_market,
@@ -64,7 +66,7 @@ class NavigationManager:
     async def close_specific_market(self, page: Page, specific_market: str) -> bool:
         """Close a specific submarket after scraping."""
         self.logger.info(f"Closing sub-market: {specific_market}")
-        return await self.browser_helper.scroll_until_visible_and_click_parent(
+        return await self.scroller.scroll_until_visible_and_click_parent(
             page=page,
             selector="div.flex.w-full.items-center.justify-start.pl-3.font-bold p",
             text=specific_market,

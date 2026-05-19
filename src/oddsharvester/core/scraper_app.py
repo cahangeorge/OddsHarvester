@@ -1,6 +1,10 @@
 import logging
+from urllib.parse import urlsplit
 
-from oddsharvester.core.browser_helper import BrowserHelper
+from oddsharvester.core.browser.cookies import CookieDismisser
+from oddsharvester.core.browser.market_navigation import MarketTabNavigator
+from oddsharvester.core.browser.scrolling import PageScroller
+from oddsharvester.core.browser.selection import SelectionManager
 from oddsharvester.core.odds_portal_market_extractor import OddsPortalMarketExtractor
 from oddsharvester.core.odds_portal_scraper import OddsPortalScraper
 from oddsharvester.core.playwright_manager import PlaywrightManager
@@ -36,6 +40,7 @@ async def run_scraper(
     browser_user_agent: str | None = None,
     browser_locale_timezone: str | None = None,
     browser_timezone_id: str | None = None,
+    base_url: str | None = None,
     target_bookmaker: str | None = None,
     scrape_odds_history: bool = False,
     headless: bool = True,
@@ -43,6 +48,7 @@ async def run_scraper(
     bookies_filter: str = BookiesFilter.ALL.value,
     period: str | None = None,
     request_delay: float = DEFAULT_REQUEST_DELAY_S,
+    concurrency_tasks: int = 3,
 ) -> ScrapeResult | None:
     """
     Runs the scraping process and handles execution.
@@ -62,20 +68,46 @@ async def run_scraper(
         f"browser_locale_timezone={browser_locale_timezone}, browser_timezone_id={browser_timezone_id}, "
         f"scrape_odds_history={scrape_odds_history}, target_bookmaker={target_bookmaker}, "
         f"headless={headless}, preview_submarkets_only={preview_submarkets_only}, "
-        f"bookies_filter={bookies_filter}, period={period}"
+        f"bookies_filter={bookies_filter}, period={period}, base_url={base_url}"
     )
+
+    if base_url:
+        host = urlsplit(base_url).netloc.lower()
+        if (
+            host != "oddsportal.com"
+            and not host.endswith(".oddsportal.com")
+            and not browser_locale_timezone
+            and not browser_timezone_id
+        ):
+            logger.warning(
+                "Regional base URL '%s' is set but no --locale/--timezone provided. "
+                "OddsPortal mirrors localise content; pass --locale and --timezone matching "
+                "the region (see GitHub issue #45) for consistent results.",
+                base_url,
+            )
 
     proxy_manager = ProxyManager(proxy_url=proxy_url, proxy_user=proxy_user, proxy_pass=proxy_pass)
     SportMarketRegistrar.register_all_markets()
     playwright_manager = PlaywrightManager()
-    browser_helper = BrowserHelper()
-    market_extractor = OddsPortalMarketExtractor(browser_helper=browser_helper)
+    cookie_dismisser = CookieDismisser()
+    selection_manager = SelectionManager()
+    tab_navigator = MarketTabNavigator()
+    scroller = PageScroller()
+
+    market_extractor = OddsPortalMarketExtractor(
+        scroller=scroller,
+        tab_navigator=tab_navigator,
+        selection_manager=selection_manager,
+    )
 
     scraper = OddsPortalScraper(
         playwright_manager=playwright_manager,
-        browser_helper=browser_helper,
         market_extractor=market_extractor,
+        scroller=scroller,
+        cookie_dismisser=cookie_dismisser,
+        selection_manager=selection_manager,
         preview_submarkets_only=preview_submarkets_only,
+        base_url=base_url,
     )
 
     try:
@@ -104,6 +136,7 @@ async def run_scraper(
                 bookies_filter=bookies_filter_enum,
                 period=period_enum,
                 request_delay=request_delay,
+                concurrent_scraping_task=concurrency_tasks,
             )
 
         if command == CommandEnum.HISTORIC:
@@ -131,6 +164,7 @@ async def run_scraper(
                     bookies_filter=bookies_filter_enum,
                     period=period_enum,
                     request_delay=request_delay,
+                    concurrent_scraping_task=concurrency_tasks,
                 )
             else:
                 return await _scrape_multiple_leagues(
@@ -146,6 +180,7 @@ async def run_scraper(
                     bookies_filter=bookies_filter_enum,
                     period=period_enum,
                     request_delay=request_delay,
+                    concurrent_scraping_task=concurrency_tasks,
                 )
 
         elif command == CommandEnum.UPCOMING_MATCHES:
@@ -170,6 +205,7 @@ async def run_scraper(
                         bookies_filter=bookies_filter_enum,
                         period=period_enum,
                         request_delay=request_delay,
+                        concurrent_scraping_task=concurrency_tasks,
                     )
                 else:
                     return await _scrape_multiple_leagues(
@@ -184,6 +220,7 @@ async def run_scraper(
                         bookies_filter=bookies_filter_enum,
                         period=period_enum,
                         request_delay=request_delay,
+                        concurrent_scraping_task=concurrency_tasks,
                     )
             else:
                 logger.info(f"""
@@ -202,6 +239,7 @@ async def run_scraper(
                     bookies_filter=bookies_filter_enum,
                     period=period_enum,
                     request_delay=request_delay,
+                    concurrent_scraping_task=concurrency_tasks,
                 )
 
         else:

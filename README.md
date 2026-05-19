@@ -4,7 +4,7 @@
 
 ### Scrape sports betting odds from OddsPortal.com with ease
 
-Extract upcoming & historical odds across 8 sports, 100+ leagues, and dozens of betting markets.
+Extract upcoming & historical odds across 10 sports, 100+ leagues, and dozens of betting markets.
 <br>Powered by Playwright browser automation. Output to JSON, CSV, or S3.
 
 <br>
@@ -41,31 +41,33 @@ oddsharvester historic -s football -l england-premier-league --season 2024-2025 
 
 ## Features
 
-| | Feature | Description |
-|---|---|---|
-| **Upcoming** | Scrape upcoming matches | Fetch odds and event details for upcoming sports matches by date or league |
-| **Historic** | Scrape historical odds | Retrieve past odds and match results for any season |
-| **Multi-market** | Advanced parsing | Structured data: dates, teams, scores, venues, and per-bookmaker odds |
-| **Storage** | Flexible output | JSON, CSV (local), or direct upload to AWS S3 |
-| **Docker** | Container-ready | Run seamlessly in Docker with environment variable configuration |
-| **Proxy** | Proxy support | Route through SOCKS/HTTP proxies for geolocation and anti-blocking |
+|                  | Feature                 | Description                                                                |
+| ---------------- | ----------------------- | -------------------------------------------------------------------------- |
+| **Upcoming**     | Scrape upcoming matches | Fetch odds and event details for upcoming sports matches by date or league |
+| **Historic**     | Scrape historical odds  | Retrieve past odds and match results for any season                        |
+| **Multi-market** | Advanced parsing        | Structured data: dates, teams, scores, venues, and per-bookmaker odds      |
+| **Storage**      | Flexible output         | JSON, CSV (local), or direct upload to AWS S3                              |
+| **Docker**       | Container-ready         | Run seamlessly in Docker with environment variable configuration           |
+| **Proxy**        | Proxy support           | Route through SOCKS/HTTP proxies for geolocation and anti-blocking         |
 
 ---
 
 ## Supported Sports & Markets
 
-| Sport | Markets |
-|---|---|
-| ⚽ Football | `1x2` `btts` `double_chance` `draw_no_bet` `over/under` `european_handicap` `asian_handicap` |
-| 🎾 Tennis | `match_winner` `total_sets_over/under` `total_games_over/under` `asian_handicap` `exact_score` |
-| 🏀 Basketball | `1x2` `moneyline` `asian_handicap` `over/under` |
-| 🏉 Rugby League | `1x2` `home_away` `double_chance` `draw_no_bet` `over/under` `handicap` |
-| 🏉 Rugby Union | `1x2` `home_away` `double_chance` `draw_no_bet` `over/under` `handicap` |
-| 🏒 Ice Hockey | `1x2` `home_away` `double_chance` `draw_no_bet` `btts` `over/under` |
-| ⚾ Baseball | `moneyline` `over/under` |
-| 🏈 American Football | `1x2` `moneyline` `over/under` `asian_handicap` |
+| Sport                | Markets                                                                                        |
+| -------------------- | ---------------------------------------------------------------------------------------------- |
+| ⚽ Football          | `1x2` `btts` `double_chance` `draw_no_bet` `over/under` `european_handicap` `asian_handicap`   |
+| 🎾 Tennis            | `match_winner` `total_sets_over/under` `total_games_over/under` `asian_handicap` `correct_score` |
+| 🏀 Basketball        | `1x2` `moneyline` `asian_handicap` `over/under`                                                |
+| 🏉 Rugby League      | `1x2` `home_away` `double_chance` `draw_no_bet` `over/under` `handicap`                        |
+| 🏉 Rugby Union       | `1x2` `home_away` `double_chance` `draw_no_bet` `over/under` `handicap`                        |
+| 🏒 Ice Hockey        | `1x2` `home_away` `double_chance` `draw_no_bet` `btts` `over/under`                            |
+| ⚾ Baseball          | `moneyline` `over/under`                                                                       |
+| 🏈 American Football | `1x2` `moneyline` `over/under` `asian_handicap`                                                |
+| 🤾 Handball          | `1x2` `home_away` `double_chance` `draw_no_bet` `over/under` `handicap`                        |
+| 🏐 Volleyball        | `home_away` `total_sets_over/under` `total_points_over/under` `asian_handicap` `correct_score` |
 
-100+ leagues supported across all sports — Premier League, La Liga, Serie A, NBA, NFL, MLB, NHL, ATP/WTA Grand Slams, and [many more](src/oddsharvester/utils/sport_league_constants.py).
+100+ leagues supported across all sports: Premier League, La Liga, Serie A, NBA, NFL, MLB, NHL, ATP/WTA Grand Slams, and [many more](src/oddsharvester/utils/sport_league_constants.py).
 
 ---
 
@@ -116,74 +118,75 @@ oddsharvester historic -s football -l england-premier-league --season 2024-2025 
 
 #### Core Options
 
-| Option | Short | Description | Default |
-|---|---|---|---|
-| `--sport` | `-s` | Sport to scrape (`football`, `tennis`, `basketball`, etc.) | *required* |
-| `--date` | `-d` | Target date in `YYYYMMDD` format | — |
-| `--league` | `-l` | Comma-separated league slugs (e.g. `england-premier-league`) | — |
-| `--market` | `-m` | Comma-separated markets (e.g. `1x2,btts`) | — |
-| `--match-link` | | Specific match URL (repeatable). Overrides `--sport`, `--date`, `--league` | — |
+| Option         | Short | Description                                                                | Default    |
+| -------------- | ----- | -------------------------------------------------------------------------- | ---------- |
+| `--sport`      | `-s`  | Sport to scrape (`football`, `tennis`, `basketball`, etc.)                 | _required_ |
+| `--date`       | `-d`  | Target date in `YYYYMMDD` format                                           | —          |
+| `--league`     | `-l`  | Comma-separated league slugs (e.g. `england-premier-league`)               | —          |
+| `--market`     | `-m`  | Comma-separated markets (e.g. `1x2,btts`)                                  | —          |
+| `--match-link` |       | Specific match URL (repeatable). Overrides `--sport`, `--date`, `--league` | —          |
 
 **`upcoming` only:** `--date` is required unless `--league` or `--match-link` is provided. `--date` and `--league` can be combined to filter the league's upcoming matches down to a specific calendar day. When combining both, the reference timezone for resolving the date is `--timezone` if provided, otherwise UTC.
 
 **`historic` only:**
 
-| Option | Description | Default |
-|---|---|---|
-| `--season` | Season: `YYYY`, `YYYY-YYYY`, or `current` | *required* |
-| `--max-pages` | Max number of result pages to scrape | unlimited |
+| Option        | Description                               | Default    |
+| ------------- | ----------------------------------------- | ---------- |
+| `--season`    | Season: `YYYY`, `YYYY-YYYY`, or `current` | _required_ |
+| `--max-pages` | Max number of result pages to scrape      | unlimited  |
 
 #### Output Options
 
-| Option | Short | Description | Default |
-|---|---|---|---|
-| `--storage` | | `local` or `remote` (S3) | `local` |
-| `--format` | `-f` | `json` or `csv` | `json` |
-| `--output` | `-o` | Output file path | `scraped_data` |
+| Option      | Short | Description              | Default        |
+| ----------- | ----- | ------------------------ | -------------- |
+| `--storage` |       | `local` or `remote` (S3) | `local`        |
+| `--format`  | `-f`  | `json` or `csv`          | `json`         |
+| `--output`  | `-o`  | Output file path         | `scraped_data` |
 
 #### Browser & Scraping Options
 
-| Option | Short | Description | Default |
-|---|---|---|---|
-| `--headless` | | Run browser in headless mode | `False` |
-| `--concurrency` | `-c` | Concurrent scraping tasks | `3` |
-| `--request-delay` | | Delay (sec) between match requests | `1.0` |
-| `--user-agent` | | Custom browser user agent | — |
-| `--locale` | | Browser locale (e.g. `fr-BE`) | — |
-| `--timezone` | | Browser timezone (e.g. `Europe/Brussels`) | — |
+| Option            | Short | Description                               | Default |
+| ----------------- | ----- | ----------------------------------------- | ------- |
+| `--headless`      |       | Run browser in headless mode              | `False` |
+| `--concurrency`   | `-c`  | Concurrent scraping tasks                 | `3`     |
+| `--request-delay` |       | Delay (sec) between match requests        | `1.0`   |
+| `--user-agent`    |       | Custom browser user agent                 | —       |
+| `--locale`        |       | Browser locale (e.g. `fr-BE`)             | —       |
+| `--timezone`      |       | Browser timezone (e.g. `Europe/Brussels`) | —       |
+| `--base-url`      |       | Scrape a regional OddsPortal mirror instead of `www.oddsportal.com` (e.g. `https://www.centroquote.it`). Page structure is identical; only the domain changes. Regional mirrors may expose a different/larger set of bookmakers. Recommended: pair with `--locale`/`--timezone` matching the region. Env var: `OH_BASE_URL`. | —       |
 
 #### Proxy Options
 
-| Option | Description |
-|---|---|
-| `--proxy-url` | Proxy URL (`http://...` or `socks5://...`) |
-| `--proxy-user` | Proxy username |
-| `--proxy-pass` | Proxy password |
+| Option         | Description                                |
+| -------------- | ------------------------------------------ |
+| `--proxy-url`  | Proxy URL (`http://...` or `socks5://...`) |
+| `--proxy-user` | Proxy username                             |
+| `--proxy-pass` | Proxy password                             |
 
 > **Tip:** For best results, match `--locale` and `--timezone` to your proxy's region.
 
 #### Advanced Options
 
-| Option | Description | Default |
-|---|---|---|
-| `--target-bookmaker` | Filter odds for a specific bookmaker | — |
-| `--odds-history` | Include historical odds movement per match | `False` |
-| `--odds-format` | Odds display format | `Decimal Odds` |
-| `--preview-only` | Fast mode — average odds only, no bookmaker details | `False` |
-| `--bookies-filter` | Bookmaker filter: `all`, `classic`, or `crypto` | `all` |
-| `--period` | Match period (sport-specific: full-time, halves, etc.) | sport default |
+| Option               | Description                                            | Default        |
+| -------------------- | ------------------------------------------------------ | -------------- |
+| `--target-bookmaker` | Filter odds for a specific bookmaker                   | —              |
+| `--odds-history`     | Include historical odds movement per match             | `False`        |
+| `--odds-format`      | Odds display format                                    | `Decimal Odds` |
+| `--preview-only`     | Fast mode — average odds only, no bookmaker details    | `False`        |
+| `--bookies-filter`   | Bookmaker filter: `all`, `classic`, or `crypto`        | `all`          |
+| `--period`           | Match period (sport-specific: full-time, halves, etc.) | sport default  |
 
 <details>
 <summary><strong>Preview Mode vs Full Mode</strong></summary>
 <br>
 
-| Aspect | Full Mode | Preview Mode |
-|---|---|---|
-| **Speed** | Slower (interactive) | Faster (passive) |
-| **Data** | All submarkets + bookmakers | Visible submarkets + avg odds |
-| **Bookmakers** | Individual bookmaker odds | Average odds only |
-| **Odds History** | Available | Not available |
-| **Structure** | By bookmaker | By submarket (avg odds) |
+| Aspect           | Full Mode                   | Preview Mode                  |
+| ---------------- | --------------------------- | ----------------------------- |
+| **Speed**        | Slower (interactive)        | Faster (passive)              |
+| **Data**         | All submarkets + bookmakers | Visible submarkets + avg odds |
+| **Bookmakers**   | Individual bookmaker odds   | Average odds only             |
+| **Odds History** | Available                   | Not available                 |
+| **Structure**    | By bookmaker                | By submarket (avg odds)       |
 
 Preview mode (`--preview-only`) is useful for quick exploration, testing data format, or light monitoring with reduced resource usage.
 
@@ -199,23 +202,24 @@ All CLI options can be set via environment variables — useful for Docker or CI
 <summary><strong>View all environment variables</strong></summary>
 <br>
 
-| Variable | CLI Option | Description |
-|---|---|---|
-| `OH_SPORT` | `--sport` | Sport to scrape |
-| `OH_LEAGUES` | `--league` | Comma-separated leagues |
-| `OH_MARKETS` | `--market` | Comma-separated markets |
-| `OH_STORAGE` | `--storage` | Storage type (local/remote) |
-| `OH_FORMAT` | `--format` | Output format (json/csv) |
-| `OH_FILE_PATH` | `--output` | Output file path |
-| `OH_HEADLESS` | `--headless` | Run in headless mode |
-| `OH_CONCURRENCY` | `--concurrency` | Number of concurrent tasks |
+| Variable           | CLI Option        | Description                  |
+| ------------------ | ----------------- | ---------------------------- |
+| `OH_SPORT`         | `--sport`         | Sport to scrape              |
+| `OH_LEAGUES`       | `--league`        | Comma-separated leagues      |
+| `OH_MARKETS`       | `--market`        | Comma-separated markets      |
+| `OH_STORAGE`       | `--storage`       | Storage type (local/remote)  |
+| `OH_FORMAT`        | `--format`        | Output format (json/csv)     |
+| `OH_FILE_PATH`     | `--output`        | Output file path             |
+| `OH_HEADLESS`      | `--headless`      | Run in headless mode         |
+| `OH_CONCURRENCY`   | `--concurrency`   | Number of concurrent tasks   |
 | `OH_REQUEST_DELAY` | `--request-delay` | Delay between requests (sec) |
-| `OH_PROXY_URL` | `--proxy-url` | Proxy server URL |
-| `OH_PROXY_USER` | `--proxy-user` | Proxy username |
-| `OH_PROXY_PASS` | `--proxy-pass` | Proxy password |
-| `OH_USER_AGENT` | `--user-agent` | Custom browser user agent |
-| `OH_LOCALE` | `--locale` | Browser locale |
-| `OH_TIMEZONE` | `--timezone` | Browser timezone ID |
+| `OH_PROXY_URL`     | `--proxy-url`     | Proxy server URL             |
+| `OH_PROXY_USER`    | `--proxy-user`    | Proxy username               |
+| `OH_PROXY_PASS`    | `--proxy-pass`    | Proxy password               |
+| `OH_USER_AGENT`    | `--user-agent`    | Custom browser user agent    |
+| `OH_LOCALE`        | `--locale`        | Browser locale               |
+| `OH_TIMEZONE`      | `--timezone`      | Browser timezone ID          |
+| `OH_BASE_URL`      | `--base-url`      | Regional OddsPortal mirror base URL |
 
 </details>
 
@@ -273,11 +277,16 @@ oddsharvester --help
 
 ```bash
 # Build
-docker build -t odds-harvester:local --target local-dev .
+docker build -t odds-harvester:local .
 
 # Run
 docker run --rm odds-harvester:local \
   python3 -m oddsharvester upcoming -s football -d 20250301 -m 1x2 --headless
+
+# Run and keep the JSON output on the host (mount a volume + use -o)
+docker run --rm -v "$PWD/_docker_out:/out" odds-harvester:local \
+  xvfb-run -- python3 -m oddsharvester upcoming \
+  -s football -d 20250301 -m 1x2 --headless -o /out/result.json
 
 # Or with environment variables
 docker run --rm \
@@ -285,31 +294,6 @@ docker run --rm \
   -e OH_HEADLESS=true \
   odds-harvester:local python3 -m oddsharvester upcoming -d 20250301 -m 1x2
 ```
-
----
-
-<details>
-<summary><strong>Cloud Deployment (AWS Lambda + Serverless)</strong></summary>
-<br>
-
-OddsHarvester can be deployed on AWS Lambda using the **Serverless Framework** with a Docker image (Playwright exceeds Lambda's 50MB deployment limit).
-
-**Setup:**
-
-1. Build the Docker image and push to ECR
-2. Configure `serverless.yaml` at the project root:
-   - Set your AWS region, S3 bucket ARN, and IAM permissions
-   - Default function: `scanAndStoreOddsPortalDataV2` (2048MB, 360s timeout)
-   - Triggers via EventBridge every 2 hours by default
-3. Deploy:
-
-```bash
-sls deploy
-```
-
-Refer to the [Serverless Framework docs](https://www.serverless.com/) for detailed setup instructions.
-
-</details>
 
 ---
 

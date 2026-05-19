@@ -11,7 +11,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from bs4 import BeautifulSoup
 from playwright.async_api import Page, TimeoutError
 
-from oddsharvester.core.browser_helper import BrowserHelper
+from oddsharvester.core.browser.cookies import CookieDismisser
+from oddsharvester.core.browser.scrolling import PageScroller
+from oddsharvester.core.browser.selection import (
+    BOOKIES_FILTER_STRATEGY,
+    SelectionManager,
+)
 from oddsharvester.core.odds_portal_market_extractor import OddsPortalMarketExtractor
 from oddsharvester.core.odds_portal_selectors import OddsPortalSelectors
 from oddsharvester.core.playwright_manager import PlaywrightManager
@@ -21,6 +26,7 @@ from oddsharvester.utils.bookies_filter_enum import BookiesFilter
 from oddsharvester.utils.constants import (
     DEFAULT_REQUEST_DELAY_S,
     DYNAMIC_CONTENT_WAIT_MS,
+    H2H_FRAGMENT_RESOLVE_TIMEOUT_MS,
     MATCH_RETRY_BASE_DELAY,
     MATCH_RETRY_MAX_ATTEMPTS,
     MATCH_RETRY_MAX_DELAY,
@@ -126,6 +132,40 @@ def _parse_date_header(header_text: str, tz_name: str | None = None) -> date | N
     return None
 
 
+_OFFSCREEN_STYLE_MARKERS = (
+    "left:-9999px",
+    "top:-9999px",
+    "display:none",
+    "visibility:hidden",
+)
+
+
+def _is_offscreen_row(row) -> bool:
+    """OddsPortal sometimes ships duplicate event rows in the DOM: a real
+    visible one and a CSS-hidden twin whose href points to a corrupted slug
+    that 301-redirects to an unrelated match. Skip the hidden twin."""
+    style = (row.get("style") or "").lower().replace(" ", "")
+    return any(marker in style for marker in _OFFSCREEN_STYLE_MARKERS)
+
+
+def _extract_fragment_match_id(match_link: str) -> str | None:
+    """
+    Extract the URL fragment as a match id from a match link.
+
+    OddsPortal H2H pages encode the requested historic match via the URL
+    fragment, e.g. `.../h2h/<home>/<away>/#<match_id>`. Returns the fragment
+    string if it looks like a match id (non-empty, no slash). Returns None
+    when no fragment is present, the fragment is empty, or it contains a
+    slash (which would indicate it isn't a bare match id).
+    """
+    if "#" not in match_link:
+        return None
+    fragment = match_link.split("#", 1)[1].strip()
+    if not fragment or "/" in fragment:
+        return None
+    return fragment
+
+
 class BaseScraper:
     """
     Base class for scraping match data from OddsPortal.
@@ -134,19 +174,33 @@ class BaseScraper:
     def __init__(
         self,
         playwright_manager: PlaywrightManager,
-        browser_helper: BrowserHelper,
         market_extractor: OddsPortalMarketExtractor,
+        scroller: PageScroller,
+        cookie_dismisser: CookieDismisser,
+        selection_manager: SelectionManager,
+        preview_submarkets_only: bool = False,
+        base_url: str | None = None,
     ):
         """
         Args:
             playwright_manager (PlaywrightManager): Handles Playwright lifecycle.
-            browser_helper (BrowserHelper): Helper class for browser interactions.
             market_extractor (OddsPortalMarketExtractor): Handles market scraping.
+            scroller (PageScroller): Handles incremental page scrolling.
+            cookie_dismisser (CookieDismisser): Handles cookie banner dismissal.
+            selection_manager (SelectionManager): Manages bookies filter and period selection.
+            preview_submarkets_only (bool): If True, only scrape average odds from visible submarkets without loading
+            individual bookmaker details.
+            base_url (str | None): Regional OddsPortal domain override (scheme+host). When None, the canonical
+            https://www.oddsportal.com is used.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.playwright_manager = playwright_manager
-        self.browser_helper = browser_helper
         self.market_extractor = market_extractor
+        self.scroller = scroller
+        self.cookie_dismisser = cookie_dismisser
+        self.selection_manager = selection_manager
+        self.preview_submarkets_only = preview_submarkets_only
+        self.base_url = base_url
 
     async def set_odds_format(self, page: Page, odds_format: OddsFormat = OddsFormat.DECIMAL_ODDS):
         """
@@ -158,7 +212,13 @@ class BaseScraper:
         """
         try:
             self.logger.info(f"Setting odds format: {odds_format.value}")
-            button_selector = "div.group > button.gap-2"
+            # Text-based selector: OddsPortal's React build periodically reshuffles
+            # Tailwind utility classes on this control (issue #68: the old
+            # `div.group > button.gap-2` stopped matching when it became
+            # `button.flex gap-3`). The button label is always the current odds
+            # format ("Decimal Odds", "Fractional Odds", ...), so matching on the
+            # "Odds" text survives class refactors. Verified live 2026-05-15.
+            button_selector = "button:has-text('Odds')"
             await page.wait_for_selector(button_selector, state="attached", timeout=ODDS_FORMAT_SELECTOR_TIMEOUT_MS)
             dropdown_button = await page.query_selector(button_selector)
 
@@ -228,8 +288,13 @@ class BaseScraper:
             current_row_date: date | None = None
             filtered_out_count = 0
             unparseable_header_count = 0
+            offscreen_skipped_count = 0
 
             for row in event_rows:
+                if _is_offscreen_row(row):
+                    offscreen_skipped_count += 1
+                    continue
+
                 if date_filter is not None:
                     header_el = row.find(attrs={"data-testid": "date-header"})
                     if header_el is not None:
@@ -250,7 +315,7 @@ class BaseScraper:
                     href = link["href"]
                     if len(href.strip("/").split("/")) <= 3:
                         continue
-                    full_url = f"{ODDSPORTAL_BASE_URL}{href}"
+                    full_url = f"{self.base_url or ODDSPORTAL_BASE_URL}{href}"
                     if full_url not in seen:
                         seen.add(full_url)
                         match_links.append(full_url)
@@ -259,10 +324,14 @@ class BaseScraper:
                 self.logger.info(
                     f"Extracted {len(match_links)} unique match links after date filtering "
                     f"(filter={date_filter.isoformat()}, filtered out {filtered_out_count} rows, "
-                    f"{unparseable_header_count} unparseable headers)."
+                    f"{unparseable_header_count} unparseable headers, "
+                    f"{offscreen_skipped_count} offscreen rows skipped)."
                 )
             else:
-                self.logger.info(f"Extracted {len(match_links)} unique match links.")
+                self.logger.info(
+                    f"Extracted {len(match_links)} unique match links "
+                    f"({offscreen_skipped_count} offscreen rows skipped)."
+                )
 
             return match_links
 
@@ -462,7 +531,12 @@ class BaseScraper:
             await page.wait_for_timeout(DYNAMIC_CONTENT_WAIT_MS)
 
             # Apply bookmaker filter before extracting odds
-            await self.browser_helper.ensure_bookies_filter_selected(page=page, desired_filter=bookies_filter)
+            await self.selection_manager.ensure_selected(
+                page=page,
+                target_value=bookies_filter.value,
+                display_label=BookiesFilter.get_display_label(bookies_filter),
+                strategy=BOOKIES_FILTER_STRATEGY,
+            )
 
             match_details = await self._extract_match_details_event_header(page, match_link)
 
@@ -501,23 +575,207 @@ class BaseScraper:
             self.logger.error(f"Error scraping match data from {match_link}: {e}")
             return None
 
-    async def _extract_match_details_event_header(self, page: Page, match_link: str) -> dict[str, Any] | None:
+    def _resolved_browser_timezone(self) -> ZoneInfo:
         """
-        Extract match details such as date, teams, and scores from the react event header.
+        Resolve the timezone the Playwright browser context is rendering in.
 
-        Args:
-            page (Page): A Playwright Page instance for this task.
-            match_link (str): The link to the match page.
+        Falls back to UTC when no timezone is configured or when an unknown
+        timezone identifier is set. Emits a warning on fallback.
+        """
+        tz_id = getattr(self.playwright_manager, "timezone_id", None) or "UTC"
+        try:
+            return ZoneInfo(tz_id)
+        except ZoneInfoNotFoundError:
+            self.logger.warning(f"Unknown timezone '{tz_id}', falling back to UTC for DOM date parsing")
+            return ZoneInfo("UTC")
 
-        Returns:
-            Optional[Dict[str, Any]]: A dictionary containing match details, or None if header is not found.
+    def _parse_match_date_from_dom(self, soup: BeautifulSoup) -> str | None:
+        """
+        Extract the match date from <div data-testid="game-time-item"> and
+        return it formatted as "YYYY-MM-DD HH:MM:SS UTC".
+
+        Returns None if the div or its child paragraphs are missing, or if
+        the text doesn't match the expected "DD MMM YYYY" + "HH:MM" shape.
         """
         try:
-            # Wait for the react event header to be loaded
+            game_time_div = soup.find("div", attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_GAME_TIME_TESTID})
+            if not game_time_div:
+                return None
+
+            paragraphs = game_time_div.find_all("p")
+            if len(paragraphs) < 3:
+                return None
+
+            date_part = paragraphs[1].get_text(strip=True).rstrip(",")
+            time_part = paragraphs[2].get_text(strip=True)
+            local_dt = datetime.strptime(f"{date_part} {time_part}", "%d %b %Y %H:%M")
+            local_dt = local_dt.replace(tzinfo=self._resolved_browser_timezone())
+            return local_dt.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S %Z")
+        except Exception as e:
+            self.logger.warning(f"DOM parse failed for match_date: {e}")
+            return None
+
+    def _parse_teams_from_dom(self, soup: BeautifulSoup) -> tuple[str | None, str | None]:
+        """
+        Extract (home_team, away_team) from <div data-testid="game-host">
+        and <div data-testid="game-guest">. Returns (None, None) if either
+        side is missing - caller falls back to JSON for both fields.
+        """
+        try:
+            host = soup.find("div", attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_GAME_HOST_TESTID})
+            guest = soup.find("div", attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_GAME_GUEST_TESTID})
+            host_p = host.find("p") if host else None
+            guest_p = guest.find("p") if guest else None
+            if not host_p or not guest_p:
+                return None, None
+            return host_p.get_text(strip=True), guest_p.get_text(strip=True)
+        except Exception as e:
+            self.logger.warning(f"DOM parse failed for teams: {e}")
+            return None, None
+
+    _SEASON_SUFFIX_RE = re.compile(r"\s+\d{4}/\d{4}$")
+
+    def _parse_league_from_dom(self, soup: BeautifulSoup) -> str | None:
+        """
+        Extract the league name from the breadcrumb navigation, stripping
+        the trailing season suffix when present (e.g. "Premier League 2024/2025"
+        -> "Premier League"). Returns None if the breadcrumb or league link is
+        missing.
+        """
+        try:
+            breadcrumbs = soup.find("div", attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_BREADCRUMBS_TESTID})
+            if not breadcrumbs:
+                return None
+            league_link = breadcrumbs.find(
+                "a", attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_BREADCRUMB_LEAGUE_TESTID}
+            )
+            if not league_link:
+                return None
+            raw = league_link.get_text(strip=True)
+            return self._SEASON_SUFFIX_RE.sub("", raw) or None
+        except Exception as e:
+            self.logger.warning(f"DOM parse failed for league_name: {e}")
+            return None
+
+    _RESULT_TEXT_RE = re.compile(r"(\d+)\s*:\s*(\d+)(?:\s*\(([\d:,\s ]+)\))?")
+
+    def _parse_results_from_dom(self, soup: BeautifulSoup) -> tuple[str | None, str | None, str | None]:
+        """
+        Extract (home_score, away_score, partial_results) from the page DOM.
+
+        Scoped to descendants of <div data-testid="game-time-item">'s parent
+        to avoid false positives elsewhere in the page. Returns (None, None,
+        None) if the score pattern isn't found.
+        """
+        try:
+            game_time_div = soup.find("div", attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_GAME_TIME_TESTID})
+            if not game_time_div:
+                return None, None, None
+            scope = game_time_div.find_parent() or soup
+            excluded = {id(game_time_div), *(id(d) for d in game_time_div.find_all("div"))}
+            for div in scope.find_all("div"):
+                if id(div) in excluded:
+                    continue
+                text = div.get_text(separator=" ", strip=True)
+                m = self._RESULT_TEXT_RE.search(text)
+                if m:
+                    home, away, partial = m.group(1), m.group(2), m.group(3)
+                    formatted_partial = (
+                        f"({re.sub(r' +', ' ', partial.replace(chr(0xA0), ' ')).strip()})" if partial else None
+                    )
+                    return home, away, formatted_partial
+            return None, None, None
+        except Exception as e:
+            self.logger.warning(f"DOM parse failed for results: {e}")
+            return None, None, None
+
+    async def _resolve_h2h_fragment_mismatch(
+        self,
+        page: Page,
+        fragment: str,
+    ) -> tuple[BeautifulSoup, dict[str, Any]] | None:
+        """
+        Force the OddsPortal React SPA to swap to the fragment-targeted match
+        and re-read the page payload.
+
+        OddsPortal `/<sport>/h2h/<home>/<away>/#<id>` URLs are H2H aggregates:
+        the SSR HTML always contains data for the next upcoming match between
+        the two teams, regardless of the requested fragment. The JS SPA reads
+        `location.hash` and refetches the correct match data. Under Playwright
+        the swap is unreliable, so we explicitly clear and re-dispatch the hash
+        to nudge it, then wait until `react-event-header`'s `eventData.id`
+        matches the requested fragment.
+
+        Returns the updated (soup, json_data) on success, or None if the wait
+        times out (the page would not show the requested match).
+        """
+        trigger_js = """
+        (desired) => {
+            if (window.location.hash !== '#' + desired) {
+                window.location.hash = '';
+                window.location.hash = '#' + desired;
+            }
+            window.dispatchEvent(new HashChangeEvent('hashchange', { newURL: window.location.href }));
+        }
+        """
+        predicate_js = """
+        (desired) => {
+            const el = document.getElementById('react-event-header');
+            if (!el) return false;
+            try {
+                const data = JSON.parse(el.getAttribute('data'));
+                return !!(data && data.eventData && data.eventData.id === desired);
+            } catch (e) { return false; }
+        }
+        """
+        try:
+            await page.evaluate(trigger_js, fragment)
+            await page.wait_for_function(
+                predicate_js,
+                arg=fragment,
+                timeout=H2H_FRAGMENT_RESOLVE_TIMEOUT_MS,
+            )
+        except TimeoutError:
+            self.logger.error(
+                f"H2H fragment resolution failed after retry: requested={fragment}; "
+                f"page never updated eventData.id to match the fragment"
+            )
+            return None
+        except Exception as e:
+            self.logger.error(f"H2H fragment resolution raised unexpected error for fragment={fragment}: {e}")
+            return None
+
+        html_content = await page.content()
+        soup = BeautifulSoup(html_content, "html.parser")
+        header_div = soup.find("div", id="react-event-header")
+        if not header_div:
+            return None
+        data_attribute = header_div.get("data")
+        if not data_attribute:
+            return None
+        try:
+            json_data = json.loads(data_attribute)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return soup, json_data
+
+    async def _extract_match_details_event_header(self, page: Page, match_link: str) -> dict[str, Any] | None:
+        """
+        Extract match details (date, teams, league, scores, venue) from the
+        match page.
+
+        Reads the React event header JSON for venue fields and as a per-field
+        fallback. Prefers DOM values for date / teams / league / scores
+        because the embedded JSON has been observed to return stale values
+        for some leagues (see PR #54).
+
+        Returns None if neither the JSON nor the DOM yield enough data to
+        identify the match (i.e. the react-event-header div itself is missing).
+        """
+        try:
             try:
                 await page.wait_for_selector("#react-event-header", timeout=SELECTOR_TIMEOUT_MS)
             except Exception:
-                # If we can't find the selector, try to get the content anyway
                 self.logger.warning("React event header selector not found, attempting to parse existing content")
 
             # TODO: page.content() serialises the full DOM which is expensive. Consider using
@@ -530,7 +788,6 @@ class BaseScraper:
                 self.logger.warning("React event header div not found in page content")
                 return None
 
-            # Check if the div has the 'data' attribute
             data_attribute = event_header_div.get("data")
             if not data_attribute:
                 self.logger.warning("React event header div found but 'data' attribute is missing")
@@ -544,24 +801,102 @@ class BaseScraper:
 
             event_body = json_data.get("eventBody", {})
             event_data = json_data.get("eventData", {})
-            unix_timestamp = event_body.get("startDate")
 
-            match_date = (
-                datetime.fromtimestamp(unix_timestamp, tz=UTC).strftime("%Y-%m-%d %H:%M:%S %Z")
-                if unix_timestamp
+            # Detect H2H fragment vs eventData.id mismatch. OddsPortal's SSR for
+            # /<sport>/h2h/<home>/<away>/#<id> carries data for a different match
+            # than the fragment-targeted one. Two distinct cases must be told
+            # apart, because they require opposite handling:
+            #
+            #   * issue #60: the SSR is the *next upcoming* matchup between the
+            #     two teams and the SPA has not swapped yet, so the DOM shows
+            #     that same wrong match too. We must force a resync, or drop the
+            #     match rather than emit the wrong (upcoming) match_date.
+            #   * PR #54: the SSR JSON is a stale *recent* match, but the SPA
+            #     *did* hydrate the DOM to the requested historic match. The
+            #     DOM-first dispatcher below already yields the correct values;
+            #     resyncing is impossible here (the embedded JSON id never
+            #     updates to the fragment) and dropping would regress PR #54.
+            #
+            # Discriminate deterministically by whether the DOM has resolved to
+            # a match different from the stale JSON: DOM-resolved => PR #54 path
+            # (trust DOM), DOM == stale JSON or absent => issue #60 path (resync
+            # or drop). This avoids any wall-clock dependency.
+            fragment = _extract_fragment_match_id(match_link)
+            event_id = event_data.get("id")
+            if fragment and event_id and fragment != event_id:
+                ssr_json_date = (
+                    datetime.fromtimestamp(event_body["startDate"], tz=UTC).strftime("%Y-%m-%d %H:%M:%S %Z")
+                    if event_body.get("startDate")
+                    else None
+                )
+                ssr_dom_date = self._parse_match_date_from_dom(soup)
+                dom_resolved_independently = ssr_dom_date is not None and ssr_dom_date != ssr_json_date
+                if dom_resolved_independently:
+                    self.logger.info(
+                        f"H2H fragment mismatch (requested={fragment} page={event_id}) but the DOM "
+                        f"resolved to the fragment match independently; using DOM-first (PR #54 path)"
+                    )
+                else:
+                    self.logger.warning(
+                        f"H2H fragment mismatch detected: requested={fragment} "
+                        f"page={event_id} url={match_link}; DOM not resolved, attempting hash-resync"
+                    )
+                    resolved = await self._resolve_h2h_fragment_mismatch(page=page, fragment=fragment)
+                    if resolved is None:
+                        return None
+                    soup, json_data = resolved
+                    event_body = json_data.get("eventBody", {})
+                    event_data = json_data.get("eventData", {})
+
+            json_match_date = (
+                datetime.fromtimestamp(event_body["startDate"], tz=UTC).strftime("%Y-%m-%d %H:%M:%S %Z")
+                if event_body.get("startDate")
                 else None
             )
+
+            # DOM extraction (each helper returns None on failure)
+            dom_match_date = self._parse_match_date_from_dom(soup)
+            dom_home, dom_away = self._parse_teams_from_dom(soup)
+            dom_league = self._parse_league_from_dom(soup)
+            dom_home_score, dom_away_score, dom_partial = self._parse_results_from_dom(soup)
+
+            # Per-field fallback: DOM wins when present, else JSON
+            match_date = dom_match_date if dom_match_date is not None else json_match_date
+            home_team = dom_home if dom_home is not None else event_data.get("home")
+            away_team = dom_away if dom_away is not None else event_data.get("away")
+            league_name = dom_league if dom_league is not None else event_data.get("tournamentName")
+            home_score_raw = dom_home_score if dom_home_score is not None else event_body.get("homeResult")
+            away_score_raw = dom_away_score if dom_away_score is not None else event_body.get("awayResult")
+            home_score = str(home_score_raw) if home_score_raw is not None else None
+            away_score = str(away_score_raw) if away_score_raw is not None else None
+            partial_results = (
+                dom_partial if dom_partial is not None else clean_html_text(event_body.get("partialresult"))
+            )
+
+            # Observability: log which fields came from DOM vs. JSON fallback
+            sources = {
+                "match_date": "dom" if dom_match_date is not None else "json",
+                "home_team": "dom" if dom_home is not None else "json",
+                "away_team": "dom" if dom_away is not None else "json",
+                "league_name": "dom" if dom_league is not None else "json",
+                "home_score": "dom" if dom_home_score is not None else "json",
+                "away_score": "dom" if dom_away_score is not None else "json",
+                "partial_results": "dom" if dom_partial is not None else "json",
+            }
+            dom_fields = sorted(k for k, v in sources.items() if v == "dom")
+            json_fields = sorted(k for k, v in sources.items() if v == "json")
+            self.logger.info(f"match_details extracted dom={dom_fields} json_fallback={json_fields}")
 
             return {
                 "scraped_date": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S %Z"),
                 "match_date": match_date,
                 "match_link": match_link,
-                "home_team": event_data.get("home"),
-                "away_team": event_data.get("away"),
-                "league_name": event_data.get("tournamentName"),
-                "home_score": event_body.get("homeResult"),
-                "away_score": event_body.get("awayResult"),
-                "partial_results": clean_html_text(event_body.get("partialresult")),
+                "home_team": home_team,
+                "away_team": away_team,
+                "league_name": league_name,
+                "home_score": home_score,
+                "away_score": away_score,
+                "partial_results": partial_results,
                 "venue": event_body.get("venue").encode("ascii", "ignore").decode("ascii")
                 if event_body.get("venue")
                 else None,

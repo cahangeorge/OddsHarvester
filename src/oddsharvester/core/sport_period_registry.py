@@ -7,10 +7,12 @@ from oddsharvester.utils.period_constants import (
     BaseballPeriod,
     BasketballPeriod,
     FootballPeriod,
+    HandballPeriod,
     IceHockeyPeriod,
     RugbyLeaguePeriod,
     RugbyUnionPeriod,
     TennisPeriod,
+    VolleyballPeriod,
 )
 from oddsharvester.utils.sport_market_constants import Sport
 
@@ -143,4 +145,8 @@ SportPeriodRegistry.register(
 )
 SportPeriodRegistry.register(
     sport=Sport.BASEBALL, period_enum=BaseballPeriod, default_period=BaseballPeriod.FULL_INCLUDING_OT
+)
+SportPeriodRegistry.register(sport=Sport.HANDBALL, period_enum=HandballPeriod, default_period=HandballPeriod.FULL_TIME)
+SportPeriodRegistry.register(
+    sport=Sport.VOLLEYBALL, period_enum=VolleyballPeriod, default_period=VolleyballPeriod.FULL_TIME
 )

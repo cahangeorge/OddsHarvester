@@ -3,7 +3,12 @@ from typing import Any
 
 from playwright.async_api import Page
 
-from oddsharvester.core.browser_helper import BrowserHelper
+from oddsharvester.core.browser.market_navigation import MarketTabNavigator
+from oddsharvester.core.browser.scrolling import PageScroller
+from oddsharvester.core.browser.selection import (
+    PERIOD_STRATEGY,
+    SelectionManager,
+)
 from oddsharvester.core.market_extraction import (
     MarketGrouping,
     NavigationManager,
@@ -23,18 +28,22 @@ class OddsPortalMarketExtractor:
     for specific match periods and bookmaker odds.
     """
 
-    def __init__(self, browser_helper: BrowserHelper):
+    def __init__(self, scroller: PageScroller, tab_navigator: MarketTabNavigator, selection_manager: SelectionManager):
         """
         Initialize OddsPortalMarketExtractor.
 
         Args:
-            browser_helper (BrowserHelper): Helper class for browser interactions.
+            scroller (PageScroller): Handles incremental page scrolling.
+            tab_navigator (MarketTabNavigator): Handles market tab navigation.
+            selection_manager (SelectionManager): Manages period selection.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.browser_helper = browser_helper
+        self.scroller = scroller
+        self.tab_navigator = tab_navigator
+        self.selection_manager = selection_manager
 
         # Initialize component classes
-        self.navigation_manager = NavigationManager(browser_helper)
+        self.navigation_manager = NavigationManager(tab_navigator=tab_navigator, scroller=scroller)
         self.odds_parser = OddsParser()
         self.submarket_extractor = SubmarketExtractor()
         self.odds_history_extractor = OddsHistoryExtractor()
@@ -181,7 +190,13 @@ class OddsPortalMarketExtractor:
             if sport:
                 period_enum = SportPeriodRegistry.from_internal_value(period, sport)
                 if period_enum:
-                    await self.browser_helper.ensure_period_selected(page=page, desired_period=period_enum)
+                    display_label = period_enum.get_display_label(period_enum)
+                    await self.selection_manager.ensure_selected(
+                        page=page,
+                        target_value=display_label,
+                        display_label=display_label,
+                        strategy=PERIOD_STRATEGY,
+                    )
                 else:
                     self.logger.debug(f"Period selection skipped for sport: {sport}")
 

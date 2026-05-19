@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from click.testing import CliRunner
 import pytest
 
+from oddsharvester import __version__
 from oddsharvester.cli.cli import cli
 
 # Use a far future date to avoid date validation issues
@@ -50,7 +51,7 @@ class TestCLIBasics:
         """Test that --version works."""
         result = runner.invoke(cli, ["--version"])
         assert result.exit_code == 0
-        assert "0.1.0" in result.output
+        assert __version__ in result.output
 
     def test_upcoming_help(self, runner):
         """Test upcoming command help."""
@@ -174,6 +175,20 @@ class TestCommonOptions:
         assert result.exit_code != 0
         assert "positive integer" in result.output.lower()
 
+    def test_upcoming_concurrency_flag_forwarded_to_run_scraper(self, runner, mock_run_scraper):
+        """`--concurrency N` on `upcoming` must reach run_scraper as concurrency_tasks=N (issue #64)."""
+        runner.invoke(cli, ["upcoming", "-s", "football", "-d", FUTURE_DATE, "-c", "10"])
+        assert mock_run_scraper["upcoming"].called
+        assert mock_run_scraper["upcoming"].call_args.kwargs.get("concurrency_tasks") == 10
+
+    def test_historic_concurrency_flag_forwarded_to_run_scraper(self, runner, mock_run_scraper):
+        """`--concurrency N` on `historic` must reach run_scraper as concurrency_tasks=N (issue #64)."""
+        runner.invoke(
+            cli, ["historic", "-s", "football", "-l", "england-premier-league", "--season", "2024", "-c", "7"]
+        )
+        assert mock_run_scraper["historic"].called
+        assert mock_run_scraper["historic"].call_args.kwargs.get("concurrency_tasks") == 7
+
     def test_invalid_proxy_url_format(self, runner, mock_run_scraper):
         """Test invalid proxy URL format."""
         result = runner.invoke(cli, ["upcoming", "-s", "football", "-d", FUTURE_DATE, "--proxy-url", "invalid"])
@@ -265,3 +280,20 @@ class TestOutputPathValidation:
         result = runner.invoke(cli, ["historic", "-s", "football", "--season", "2024", "-o", str(existing_dir)])
         assert result.exit_code != 0
         assert "must not be an existing directory" in result.output
+
+
+def test_all_registered_sport_periods_are_cli_selectable():
+    """Every period of every registered sport must be a valid --period CLI choice.
+
+    Regression guard: handball and volleyball periods (e.g. 3rd_set..5th_set)
+    were missing from the CLI choice list because _get_all_periods() used a
+    hardcoded enum list that omitted those sports. This test fails if a new
+    sport's periods are added to the registry but not exposed via the CLI.
+    """
+    from oddsharvester.cli.options import _get_all_periods
+    from oddsharvester.core.sport_period_registry import SportPeriodRegistry
+
+    cli_periods = set(_get_all_periods())
+    for sport, config in SportPeriodRegistry._registry.items():
+        for period in config["enum"]:
+            assert period.value in cli_periods, f"{sport} period {period.value!r} not selectable via --period CLI"

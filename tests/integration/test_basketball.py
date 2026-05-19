@@ -23,6 +23,7 @@ LAKERS_WARRIORS = {
 
 
 @pytest.mark.integration
+@pytest.mark.live_only
 class TestBasketballBasicMarkets:
     """Tests for basic basketball markets."""
 
@@ -32,6 +33,7 @@ class TestBasketballBasicMarkets:
         load_fixture,
         temp_output_dir,
         fixture_exists,
+        har_for_match,
     ):
         """BB-001: Test home_away market, full including OT."""
         fixture_name = "home_away_full_including_ot_all.json"
@@ -52,6 +54,9 @@ class TestBasketballBasicMarkets:
             markets=["home_away"],
             output_path=output_path,
             period="full_including_ot",
+            har_path=har_for_match(
+                LAKERS_CELTICS["sport"], LAKERS_CELTICS["league"], LAKERS_CELTICS["match_id"], fixture_name
+            ),
         )
 
         assert exit_code == 0, f"Scraper failed: {stderr}"
@@ -75,6 +80,7 @@ class TestBasketballBasicMarkets:
         load_fixture,
         temp_output_dir,
         fixture_exists,
+        har_for_match,
     ):
         """BB-002: Test home_away and 1x2 markets."""
         fixture_name = "1x2_home_away_full_including_ot_all.json"
@@ -94,6 +100,9 @@ class TestBasketballBasicMarkets:
             match_link=LAKERS_CELTICS["url"],
             markets=["home_away", "1x2"],
             output_path=output_path,
+            har_path=har_for_match(
+                LAKERS_CELTICS["sport"], LAKERS_CELTICS["league"], LAKERS_CELTICS["match_id"], fixture_name
+            ),
         )
 
         assert exit_code == 0, f"Scraper failed: {stderr}"
@@ -117,6 +126,7 @@ class TestBasketballBasicMarkets:
         load_fixture,
         temp_output_dir,
         fixture_exists,
+        har_for_match,
     ):
         """BB-003: Test Lakers vs Warriors."""
         fixture_name = "home_away_full_including_ot_all.json"
@@ -136,6 +146,9 @@ class TestBasketballBasicMarkets:
             match_link=LAKERS_WARRIORS["url"],
             markets=["home_away"],
             output_path=output_path,
+            har_path=har_for_match(
+                LAKERS_WARRIORS["sport"], LAKERS_WARRIORS["league"], LAKERS_WARRIORS["match_id"], fixture_name
+            ),
         )
 
         assert exit_code == 0, f"Scraper failed: {stderr}"
@@ -155,6 +168,7 @@ class TestBasketballBasicMarkets:
 
 
 @pytest.mark.integration
+@pytest.mark.live_only
 class TestBasketballPeriods:
     """Tests for basketball period options."""
 
@@ -164,6 +178,7 @@ class TestBasketballPeriods:
         load_fixture,
         temp_output_dir,
         fixture_exists,
+        har_for_match,
     ):
         """BB-004: Test home_away market, 1st half."""
         fixture_name = "home_away_1st_half_all.json"
@@ -184,6 +199,9 @@ class TestBasketballPeriods:
             markets=["home_away"],
             output_path=output_path,
             period="1st_half",
+            har_path=har_for_match(
+                LAKERS_CELTICS["sport"], LAKERS_CELTICS["league"], LAKERS_CELTICS["match_id"], fixture_name
+            ),
         )
 
         assert exit_code == 0, f"Scraper failed: {stderr}"
@@ -207,6 +225,7 @@ class TestBasketballPeriods:
         load_fixture,
         temp_output_dir,
         fixture_exists,
+        har_for_match,
     ):
         """BB-005: Test home_away market, 1st quarter."""
         fixture_name = "home_away_1st_quarter_all.json"
@@ -227,6 +246,9 @@ class TestBasketballPeriods:
             markets=["home_away"],
             output_path=output_path,
             period="1st_quarter",
+            har_path=har_for_match(
+                LAKERS_CELTICS["sport"], LAKERS_CELTICS["league"], LAKERS_CELTICS["match_id"], fixture_name
+            ),
         )
 
         assert exit_code == 0, f"Scraper failed: {stderr}"
@@ -250,6 +272,7 @@ class TestBasketballPeriods:
         load_fixture,
         temp_output_dir,
         fixture_exists,
+        har_for_match,
     ):
         """BB-006: Test Lakers vs Warriors, 1st half."""
         fixture_name = "home_away_1st_half_all.json"
@@ -270,6 +293,9 @@ class TestBasketballPeriods:
             markets=["home_away"],
             output_path=output_path,
             period="1st_half",
+            har_path=har_for_match(
+                LAKERS_WARRIORS["sport"], LAKERS_WARRIORS["league"], LAKERS_WARRIORS["match_id"], fixture_name
+            ),
         )
 
         assert exit_code == 0, f"Scraper failed: {stderr}"

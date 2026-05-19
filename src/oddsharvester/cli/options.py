@@ -6,6 +6,7 @@ import click
 
 from oddsharvester.cli.types import BOOKIES_FILTER, COMMA_LIST, ODDS_FORMAT, SPORT, STORAGE_FORMAT, STORAGE_TYPE
 from oddsharvester.cli.validators import (
+    validate_base_url,
     validate_concurrency,
     validate_file_path,
     validate_leagues,
@@ -21,10 +22,12 @@ from oddsharvester.utils.period_constants import (
     BaseballPeriod,
     BasketballPeriod,
     FootballPeriod,
+    HandballPeriod,
     IceHockeyPeriod,
     RugbyLeaguePeriod,
     RugbyUnionPeriod,
     TennisPeriod,
+    VolleyballPeriod,
 )
 
 
@@ -40,6 +43,8 @@ def _get_all_periods():
         AmericanFootballPeriod,
         IceHockeyPeriod,
         BaseballPeriod,
+        HandballPeriod,
+        VolleyballPeriod,
     ]:
         periods.update(p.value for p in period_enum)
     return sorted(periods)
@@ -158,6 +163,16 @@ def common_options(func):
         "browser_timezone_id",
         envvar="OH_TIMEZONE",
         help="Browser timezone ID (e.g., Europe/Brussels).",
+    )
+    @click.option(
+        "--base-url",
+        "base_url",
+        callback=validate_base_url,
+        envvar="OH_BASE_URL",
+        help=(
+            "Regional OddsPortal domain to scrape instead of www.oddsportal.com "
+            "(e.g. https://www.centroquote.it). Pair with --locale/--timezone matching the region."
+        ),
     )
     @click.option(
         "--target-bookmaker",

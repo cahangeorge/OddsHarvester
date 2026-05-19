@@ -81,6 +81,7 @@ def _wait_past_url_building(process: subprocess.Popen, deadline_seconds: float =
 
 
 @pytest.mark.integration
+@pytest.mark.live_only
 class TestHistoricCurrentSeason:
     """End-to-end regression coverage for `--season current` (issue #59)."""
 

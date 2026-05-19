@@ -4,7 +4,6 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from playwright.async_api import Browser, BrowserContext, Page
 import pytest
 
-from oddsharvester.core.browser_helper import BrowserHelper
 from oddsharvester.core.odds_portal_market_extractor import OddsPortalMarketExtractor
 from oddsharvester.core.odds_portal_scraper import LinkCollectionResult, OddsPortalScraper
 from oddsharvester.core.playwright_manager import PlaywrightManager
@@ -17,7 +16,6 @@ def setup_scraper_mocks():
     """Setup common mocks for the OddsPortalScraper tests."""
     # Create mocks for dependencies
     playwright_manager_mock = MagicMock(spec=PlaywrightManager)
-    browser_helper_mock = MagicMock(spec=BrowserHelper)
     market_extractor_mock = MagicMock(spec=OddsPortalMarketExtractor)
 
     # Setup page and context mocks
@@ -32,21 +30,22 @@ def setup_scraper_mocks():
     playwright_manager_mock.context = context_mock
     playwright_manager_mock.browser = browser_mock
 
-    # Configure the browser helper mock
-    browser_helper_mock.dismiss_cookie_banner = AsyncMock()
+    cookie_dismisser_mock = AsyncMock()
 
     # Create scraper instance with mocks
     scraper = OddsPortalScraper(
         playwright_manager=playwright_manager_mock,
-        browser_helper=browser_helper_mock,
         market_extractor=market_extractor_mock,
+        scroller=AsyncMock(),
+        cookie_dismisser=cookie_dismisser_mock,
+        selection_manager=AsyncMock(),
     )
 
     return {
         "scraper": scraper,
         "playwright_manager_mock": playwright_manager_mock,
-        "browser_helper_mock": browser_helper_mock,
         "market_extractor_mock": market_extractor_mock,
+        "cookie_dismisser_mock": cookie_dismisser_mock,
         "page_mock": page_mock,
         "context_mock": context_mock,
         "browser_mock": browser_mock,
@@ -145,7 +144,7 @@ async def test_scrape_historic(url_builder_mock, setup_scraper_mocks):
 
     # Verify the interactions
     url_builder_mock.get_historic_matches_url.assert_called_once_with(
-        sport="football", league="premier-league", season="2023"
+        sport="football", league="premier-league", season="2023", base_url=None
     )
     page_mock.goto.assert_called_once()
     scraper._prepare_page_for_scraping.assert_called_once_with(page=page_mock)
@@ -159,6 +158,7 @@ async def test_scrape_historic(url_builder_mock, setup_scraper_mocks):
         markets=["1x2"],
         scrape_odds_history=True,
         target_bookmaker="bet365",
+        concurrent_scraping_task=ANY,
         preview_submarkets_only=False,
         bookies_filter=ANY,
         period=ANY,
@@ -210,7 +210,7 @@ async def test_scrape_upcoming(url_builder_mock, setup_scraper_mocks):
 
     # Verify the interactions
     url_builder_mock.get_upcoming_matches_url.assert_called_once_with(
-        sport="football", date="20260601", league="premier-league"
+        sport="football", date="20260601", league="premier-league", base_url=None
     )
     page_mock.goto.assert_called_once()
     scraper._prepare_page_for_scraping.assert_called_once_with(page=page_mock)
@@ -224,6 +224,7 @@ async def test_scrape_upcoming(url_builder_mock, setup_scraper_mocks):
         markets=["1x2", "over_under"],
         scrape_odds_history=False,
         target_bookmaker=None,
+        concurrent_scraping_task=ANY,
         preview_submarkets_only=False,
         bookies_filter=ANY,
         period=ANY,
@@ -274,7 +275,7 @@ async def test_scrape_matches(setup_scraper_mocks):
         markets=["1x2"],
         scrape_odds_history=True,
         target_bookmaker="bwin",
-        concurrent_scraping_task=2,
+        concurrent_scraping_task=3,
         preview_submarkets_only=False,
         bookies_filter=ANY,
         period=ANY,
@@ -285,6 +286,43 @@ async def test_scrape_matches(setup_scraper_mocks):
     assert isinstance(result, ScrapeResult)
     assert len(result.success) == 2
     assert result.stats.successful == 2
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.odds_portal_scraper.URLBuilder")
+async def test_scrape_upcoming_forwards_concurrent_scraping_task(url_builder_mock, setup_scraper_mocks):
+    """scrape_upcoming must forward concurrent_scraping_task to extract_match_odds (issue #64)."""
+    mocks = setup_scraper_mocks
+    scraper = mocks["scraper"]
+
+    url_builder_mock.get_upcoming_matches_url.return_value = "https://oddsportal.com/football/matches/20260601"
+    scraper._prepare_page_for_scraping = AsyncMock()
+    scraper.extract_match_links = AsyncMock(return_value=["https://oddsportal.com/m1"])
+    scraper.extract_match_odds = AsyncMock(return_value=ScrapeResult())
+
+    await scraper.scrape_upcoming(sport="football", date="20260601", concurrent_scraping_task=10)
+
+    assert scraper.extract_match_odds.call_args.kwargs.get("concurrent_scraping_task") == 10
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.odds_portal_scraper.URLBuilder")
+async def test_scrape_historic_forwards_concurrent_scraping_task(url_builder_mock, setup_scraper_mocks):
+    """scrape_historic must forward concurrent_scraping_task to extract_match_odds (issue #64)."""
+    mocks = setup_scraper_mocks
+    scraper = mocks["scraper"]
+
+    url_builder_mock.get_historic_matches_url.return_value = "https://oddsportal.com/football/england/premier-league"
+    scraper._prepare_page_for_scraping = AsyncMock()
+    scraper._get_pagination_info = AsyncMock(return_value=[1])
+    scraper._collect_match_links = AsyncMock(
+        return_value=LinkCollectionResult(links=["https://oddsportal.com/m1"], successful_pages=1, failed_pages=[])
+    )
+    scraper.extract_match_odds = AsyncMock(return_value=ScrapeResult())
+
+    await scraper.scrape_historic(sport="football", league="premier-league", season="2024", concurrent_scraping_task=7)
+
+    assert scraper.extract_match_odds.call_args.kwargs.get("concurrent_scraping_task") == 7
 
 
 @pytest.mark.asyncio
@@ -302,7 +340,7 @@ async def test_prepare_page_for_scraping(setup_scraper_mocks):
 
     # Verify the interactions
     scraper.set_odds_format.assert_called_once_with(page=page_mock)
-    mocks["browser_helper_mock"].dismiss_cookie_banner.assert_called_once_with(page=page_mock)
+    mocks["cookie_dismisser_mock"].dismiss.assert_called_once_with(page=page_mock)
 
 
 @pytest.mark.asyncio

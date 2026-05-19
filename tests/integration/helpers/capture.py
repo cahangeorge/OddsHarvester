@@ -20,6 +20,7 @@ This will:
 import argparse
 from datetime import UTC, datetime
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -66,6 +67,47 @@ def build_fixture_filename(
     return f"{markets_str}_{period}_{bookies_filter}.json"
 
 
+def _alias_fragmented_redirect_targets(har_path: Path) -> None:
+    """Add aliased entries for fragmented redirect targets so HAR replay can resolve them.
+
+    OddsPortal H2H pages use URL fragments (`#match_id`) to select which match in the
+    H2H series to display. Match URLs 301-redirect to `/h2h/<teams>/#match_id`. Playwright's
+    `route_from_har` with `not_found="abort"` looks up the fragmented redirect target
+    against HAR entries verbatim; since HAR records the bare URL (HTTP fragments never
+    reach the wire), the fragmented lookup fails and the navigation aborts. We can't
+    simply strip the fragment from the Location header — JS reads `location.hash` to
+    pick the right match, so dropping it shows the wrong match.
+
+    The fix: for each Location header with a fragment, duplicate the bare-URL entry as
+    an alias at the fragmented URL. The redirect chain now resolves, and the browser's
+    `location.hash` is preserved (Playwright sets it from the redirect target), so JS
+    renders the intended match.
+    """
+    har = json.loads(har_path.read_text())
+    entries = har.get("log", {}).get("entries", [])
+    url_to_entry = {entry["request"]["url"]: entry for entry in entries if "request" in entry}
+
+    fragmented_targets: set[str] = set()
+    for entry in entries:
+        for header in entry.get("response", {}).get("headers", []):
+            if header.get("name", "").lower() == "location":
+                value = header.get("value", "")
+                if "#" in value:
+                    fragmented_targets.add(value)
+
+    new_entries = []
+    for fragmented_url in fragmented_targets:
+        bare_url = fragmented_url.split("#", 1)[0]
+        if bare_url in url_to_entry and fragmented_url not in url_to_entry:
+            alias = json.loads(json.dumps(url_to_entry[bare_url]))
+            alias["request"]["url"] = fragmented_url
+            new_entries.append(alias)
+
+    if new_entries:
+        entries.extend(new_entries)
+        har_path.write_text(json.dumps(har))
+
+
 def capture_fixture(
     sport: str,
     league: str,
@@ -77,6 +119,7 @@ def capture_fixture(
     headless: bool = True,
     timeout: int = 300,
     season: str = "current",
+    capture_har: bool = False,
 ) -> Path:
     """
     Capture a new fixture from live scraping.
@@ -125,13 +168,20 @@ def capture_fixture(
     if headless:
         cmd.append("--headless")
 
+    har_path = output_path.with_suffix(".har")
+
     # Run scraper
     print(f"Running scraper for {match_url}...")
     print(f"Command: {' '.join(cmd)}")
     print()
 
+    env = os.environ.copy()
+    if capture_har:
+        env["ODDSHARVESTER_HAR_RECORD"] = str(har_path)
+        print(f"Recording HAR to: {har_path}")
+
     result = subprocess.run(  # noqa: S603
-        cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=timeout
+        cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=timeout, env=env
     )
 
     if result.returncode != 0:
@@ -147,6 +197,12 @@ def capture_fixture(
     # Verify output file exists
     if not output_path.exists():
         raise RuntimeError(f"Output file not created: {output_path}")
+
+    if capture_har and not har_path.exists():
+        raise RuntimeError(f"HAR file not created: {har_path}")
+
+    if capture_har:
+        _alias_fragmented_redirect_targets(har_path)
 
     # Load scraped data to extract metadata
     with open(output_path) as f:
@@ -237,6 +293,11 @@ Examples:
     parser.add_argument("--no-headless", action="store_true", help="Run browser with GUI (for debugging)")
     parser.add_argument("--timeout", type=int, default=300, help="Timeout in seconds (default: 300)")
     parser.add_argument("--season", default="current", help="Season (default: current, e.g., 2024-2025)")
+    parser.add_argument(
+        "--capture-har",
+        action="store_true",
+        help="Record a HAR file (snapshot.har) alongside the JSON fixture.",
+    )
 
     args = parser.parse_args()
 
@@ -253,6 +314,7 @@ Examples:
             headless=not args.no_headless,
             timeout=args.timeout,
             season=args.season,
+            capture_har=args.capture_har,
         )
         print()
         print("Done!")

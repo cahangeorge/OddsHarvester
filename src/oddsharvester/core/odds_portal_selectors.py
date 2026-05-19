@@ -40,6 +40,14 @@ class OddsPortalSelectors:
     PERIOD_SELECTOR_CONTAINER = "div[data-testid='kickoff-events-nav']"
     PERIOD_ACTIVE_CLASS = "active-item-calendar"
 
+    # Match details — data-testid values for DOM-based extraction
+    # (used by base_scraper._extract_match_details_event_header DOM helpers)
+    MATCH_DETAILS_GAME_TIME_TESTID = "game-time-item"
+    MATCH_DETAILS_GAME_HOST_TESTID = "game-host"
+    MATCH_DETAILS_GAME_GUEST_TESTID = "game-guest"
+    MATCH_DETAILS_BREADCRUMBS_TESTID = "breadcrumbs-line"
+    MATCH_DETAILS_BREADCRUMB_LEAGUE_TESTID = "3"
+
     @staticmethod
     def get_dropdown_selectors_for_market(market_name: str) -> list[str]:
         """Generate dropdown selectors for a specific market name."""

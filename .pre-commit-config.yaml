@@ -28,6 +28,7 @@ repos:
       - id: check-added-large-files
         name: check for added large files
         args: ["--maxkb=1000"]
+        exclude: '\.har$'
       - id: debug-statements
         name: debug statements (Python)
 
@@ -45,3 +46,4 @@ repos:
         name: check use type annotations
       - id: text-unicode-replacement-char
         name: check for unicode replacement chars
+        exclude: '\.har$'

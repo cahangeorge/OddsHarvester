@@ -20,7 +20,8 @@ import sys
 from bs4 import BeautifulSoup
 from playwright.async_api import Page
 
-from oddsharvester.core.browser_helper import BrowserHelper
+from oddsharvester.core.browser.cookies import CookieDismisser
+from oddsharvester.core.browser.scrolling import PageScroller
 from oddsharvester.core.odds_portal_selectors import OddsPortalSelectors
 from oddsharvester.core.playwright_manager import PlaywrightManager
 from oddsharvester.core.url_builder import URLBuilder
@@ -56,7 +57,14 @@ def extract_match_links(html_content: str) -> set[str]:
     }
 
 
-async def validate_one(page: Page, bh: BrowserHelper, sport: str, league: str, season: str | None) -> bool:
+async def validate_one(
+    page: Page,
+    cookie_dismisser: CookieDismisser,
+    scroller: PageScroller,
+    sport: str,
+    league: str,
+    season: str | None,
+) -> bool:
     """Validate a single league/season. Returns True if match links found."""
     try:
         url = URLBuilder.get_historic_matches_url(sport=sport, league=league, season=season)
@@ -66,9 +74,9 @@ async def validate_one(page: Page, bh: BrowserHelper, sport: str, league: str, s
 
     try:
         await page.goto(url, timeout=15000, wait_until="domcontentloaded")
-        await bh.dismiss_cookie_banner(page)
+        await cookie_dismisser.dismiss(page)
         await page.wait_for_timeout(7000)
-        await bh.scroll_until_loaded(
+        await scroller.scroll_until_loaded(
             page=page,
             timeout=30,
             scroll_pause_time=2,
@@ -108,7 +116,8 @@ async def run(args: argparse.Namespace) -> int:
 
     # Launch browser once, validate all leagues
     pm = PlaywrightManager()
-    bh = BrowserHelper()
+    cookie_dismisser = CookieDismisser()
+    scroller = PageScroller()
     ok_count = 0
     ko_count = 0
 
@@ -116,7 +125,7 @@ async def run(args: argparse.Namespace) -> int:
         await pm.initialize(headless=args.headless, user_agent=args.user_agent, proxy=proxy_config)
 
         for league in leagues:
-            success = await validate_one(pm.page, bh, sport, league, args.season)
+            success = await validate_one(pm.page, cookie_dismisser, scroller, sport, league, args.season)
             if success:
                 ok_count += 1
             else:
@@ -127,7 +136,7 @@ async def run(args: argparse.Namespace) -> int:
 
     # Summary
     total = ok_count + ko_count
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"Results: {ok_count}/{total} OK, {ko_count} KO")
 
     return 0 if ko_count == 0 else 1

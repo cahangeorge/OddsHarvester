@@ -14,6 +14,7 @@ TENNIS_MATCH_URL = (
 
 
 @pytest.mark.integration
+@pytest.mark.live_only
 class TestOutputFormatJSON:
     """Tests for JSON output format (default)."""
 
@@ -48,6 +49,7 @@ class TestOutputFormatJSON:
 
 
 @pytest.mark.integration
+@pytest.mark.live_only
 class TestOutputFormatCSV:
     """Tests for CSV output format."""
 
@@ -137,6 +139,7 @@ class TestOutputFormatCSV:
 
 
 @pytest.mark.integration
+@pytest.mark.live_only
 class TestBookiesFilter:
     """Tests for --bookies-filter option."""
 
@@ -213,6 +216,7 @@ class TestBookiesFilter:
 
 
 @pytest.mark.integration
+@pytest.mark.live_only
 class TestMultipleMarkets:
     """Tests for scraping multiple markets in one command."""
 

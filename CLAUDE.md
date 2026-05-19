@@ -4,7 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OddsHarvester is a Python web scraper that extracts sports betting odds from oddsportal.com. It uses Playwright for browser automation and BeautifulSoup/lxml for HTML parsing. Supports multiple sports (football, tennis, basketball, rugby, ice hockey, baseball, American football), various betting markets, and stores output locally (JSON/CSV) or remotely (AWS S3).
+OddsHarvester is a Python web scraper that extracts sports betting odds from oddsportal.com. It uses Playwright for browser automation and BeautifulSoup/lxml for HTML parsing. Supports multiple sports (football, tennis, basketball, rugby, ice hockey, baseball, American football, handball, volleyball), various betting markets, and stores output locally (JSON/CSV) or remotely (AWS S3).
+
+## Before You Code — Read This
+
+**`docs/agentic-gotchas.md`** documents recurring OddsPortal-specific traps that are not deducible from the code alone — stale/phantom SSR data, silent truncation by client-side rendering (pagination ellipsis, lazy-load, URL conventions), per-bookmaker data format variation, league sponsor renames, CLI normalization layering, and anti-bot detection symptoms. Read it before:
+
+- Adding or modifying any DOM/JSON parsing in `base_scraper.py` or `market_extraction/`
+- Iterating over rendered DOM collections (pagination, listings, scroll, market dropdowns)
+- Parsing or extracting bookmaker odds, names, or any per-row attribute
+- Adding a new league or modifying `sport_league_constants.py` / `league_aliases.py`
+- Adding a CLI option or modifying option-validation logic in `cli/commands/`
+- Changing Playwright browser args, stealth scripts, or anti-detection config in `playwright_manager.py`
+- Triaging a "0 results returned" symptom before assuming it's a parsing bug
+
+When a fix exposes a new OddsPortal behaviour worth remembering, append it to `docs/agentic-gotchas.md` (criteria are listed at the bottom of that file).
 
 ## Commands
 
@@ -21,8 +35,11 @@ uv run oddsharvester scrape-historic --sport football --leagues england-premier-
 # Run unit tests
 uv run pytest tests/ -q --ignore=tests/integration/
 
-# Run integration tests (requires internet, slower)
+# Run integration tests (default mode: HAR replay, deterministic, no network)
 uv run pytest tests/integration/ -q -m integration
+
+# Run integration tests against live OddsPortal (slower, hits the network)
+uv run pytest tests/integration/ -q -m integration --live
 
 # Run a single test file
 uv run pytest tests/core/test_url_builder.py -q
@@ -50,14 +67,14 @@ Four-layer architecture:
 CLI Layer (src/oddsharvester/cli/) → Core Layer (src/oddsharvester/core/) → Data Layer (src/oddsharvester/utils/) → Storage Layer (src/oddsharvester/storage/)
 ```
 
-**Entry points**: `oddsharvester` CLI command (or `python -m oddsharvester`), `src/oddsharvester/lambda_handler.py` (AWS Lambda)
+**Entry points**: `oddsharvester` CLI command (or `python -m oddsharvester`)
 
 **Core Layer** (`src/oddsharvester/core/`):
 
 - `scraper_app.py` — Top-level orchestrator; initializes browser, scraper, and storage
 - `odds_portal_scraper.py` — Navigates pages, extracts match links, coordinates per-match scraping
 - `playwright_manager.py` — Browser lifecycle (launch, context, page creation)
-- `browser_helper.py` — Page interactions (cookies, scrolling, waiting)
+- `browser/` — Sub-package of focused browser-interaction helpers: `cookies.py` (`CookieDismisser`), `scrolling.py` (`PageScroller`), `market_navigation.py` (`MarketTabNavigator`), `selection.py` (`SelectionManager` + strategy pattern for filter/period selection)
 - `odds_portal_market_extractor.py` — Extracts odds for specified markets from a match page
 - `url_builder.py` — Constructs oddsportal.com URLs for historic/upcoming matches
 - `sport_market_registry.py` — Registers market name→tab mappings per sport
@@ -98,6 +115,30 @@ CLI Layer (src/oddsharvester/cli/) → Core Layer (src/oddsharvester/core/) → 
    ```
 3. The slug should be lowercase with hyphens (e.g., `croatia-hnl`, `japan-j1-league`)
 
+## Integration Tests — HAR Replay
+
+Integration tests under `tests/integration/` run in **HAR replay mode by default** (deterministic, no network). The scraper is exercised against a recorded `<fixture-stem>.har` per JSON fixture instead of hitting `oddsportal.com` live. Two pytest hooks drive this:
+
+- **`har_for_match` fixture** (`tests/integration/conftest.py`): returns the path to `<fixture-stem>.har` next to each JSON fixture, or `None` when the HAR is missing or `--live` is passed. Tests pass it as `har_path=` to `run_scraper`.
+- **`PlaywrightManager`** reads `ODDSHARVESTER_HAR_REPLAY` (set by `run_scraper` from `har_path`) and wires `context.route_from_har(...)` with `not_found="abort"`. Symmetric env var `ODDSHARVESTER_HAR_RECORD` is used during capture.
+
+**Run modes:**
+- Default (`pytest tests/integration/ -m integration`) — replay only, `live_only` tests skipped.
+- `--live` flag — bypasses HAR replay, runs every test against the real OddsPortal (slow, flaky on fixture drift, used for nightly health checks and capturing fresh fixtures).
+
+**Capturing / refreshing fixtures:**
+```bash
+# Single match (writes both JSON output and the .har sibling)
+uv run python -m tests.integration.helpers.capture --sport football --league premier-league \
+    --match-url "https://..." --markets "1x2" --period "full_time" --bookies-filter "all" --capture-har
+
+# Bulk re-capture every match dir under tests/integration/fixtures/
+uv run python scripts/capture_all_hars.py
+```
+Recapture when scraper parsing changes, after a Playwright upgrade, or quarterly to refresh against current OddsPortal HTML.
+
+**Known limitation — `live_only` tests:** OddsPortal H2H pages (basketball NBA, real-madrid-barcelona, djokovic-sinner) use URL fragments (`#match_id`) to select which match in an H2H series to render, plus cache-busted AJAX endpoints (`?<runtime-hash>`) to fetch match-specific data. HAR replay can't reproduce both: the fragment is preserved on `location.hash`, but JS computes a new cache-buster at runtime that doesn't match the recorded URL, so the page falls back to a different match in the series. These tests are marked `@pytest.mark.live_only` and skipped in default mode; run them with `--live` when validating against the live site. The 8 fixtures that *don't* trigger the H2H redirect chain (leicester-brentford, djokovic-lehecka, humbert-zverev) replay cleanly. See `tests/integration/helpers/capture.py:_alias_fragmented_redirect_targets` for the workaround that handles the redirect-with-fragment case.
+
 ## Code Style
 
 - Python >=3.12, line length 120, double quotes
@@ -125,6 +166,29 @@ CLI Layer (src/oddsharvester/cli/) → Core Layer (src/oddsharvester/core/) → 
   - Retry logic → `src/oddsharvester/core/retry.py`
   - Result handling → create shared helpers rather than copy-pasting
 - **Before adding new constants/utilities**: Search the codebase (`grep`/`rg`) to check if similar functionality already exists
+
+### Branch & Merge Workflow (linear history)
+
+`master` history must stay **linear** — no `--no-ff` merge bubbles. The repo is
+configured locally with `merge.ff = only` and `pull.ff = only`, so a non-fast-forward
+merge or pull will fail by design. Workflow for any feature/fix branch:
+
+```bash
+git switch -c feat/my-thing            # work on a branch (never commit straight to master)
+# ... commits ...
+git fetch origin
+git rebase origin/master               # replay branch on top of latest master
+git switch master
+git merge --ff-only feat/my-thing      # fast-forward only; refuses if not linear
+git branch -d feat/my-thing
+```
+
+- Never use `git merge --no-ff` and never resolve a divergence with a merge commit.
+- If `git merge --ff-only` is rejected, rebase the branch onto `master` first — do
+  not work around it with a merge commit.
+- **Never rewrite/`push --force` published `master`** — it is a public repo with forks
+  and external PRs. The pre-`v0.2.1` and existing merge-bubble history stays as-is;
+  this policy only governs new work.
 
 ## Release Process
 
