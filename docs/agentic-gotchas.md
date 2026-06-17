@@ -261,6 +261,19 @@ CLI slugs and existing tests — only the URL *values* were corrected. No
 were not in scope; if a user reports historic-season breakage, add aliases
 per the fix pattern above.
 
+### Tournament pages can drift to year-branded slugs while the public name stays stable
+
+The football World Cup exposed another variant in June 2026: the legacy
+`/football/world/world-cup/` path stopped being canonical and redirected through
+a malformed `world-championship-2026\` location that ended in `404`, while the
+working live page moved to `/football/world/world-championship-2026/`.
+
+**Fix pattern:** keep the stable CLI key (`world-cup`) and update only the URL
+value in `SPORTS_LEAGUES_URLS_MAPPING`, then pin the value in
+`tests/utils/test_sport_league_constants.py`. For current-tournament scraping we
+do **not** need a `LEAGUE_SEASON_ALIASES` entry unless historic season pages use
+different slugs and are a supported use case.
+
 Validate handball slugs with `uv run python scripts/validate_league.py -s
 handball --all` (the project's hardened `PlaywrightManager` gets past the
 anti-bot layer that blocks a vanilla browser).

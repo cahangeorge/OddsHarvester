@@ -88,3 +88,15 @@ class TestVolleyballLeagueConstants:
             fresh_mapping[Sport.VOLLEYBALL]["cev-champions-league"]
             == "https://www.oddsportal.com/volleyball/europe/champions-league/"
         )
+
+
+class TestFootballLeagueConstants:
+    """Guards production football mappings that intentionally keep stable CLI slugs."""
+
+    def test_world_cup_url_tracks_current_world_championship_slug(self, fresh_mapping):
+        # OddsPortal renamed the current tournament page to `world-championship-2026`
+        # while our public/API slug remains `world-cup`.
+        assert (
+            fresh_mapping[Sport.FOOTBALL]["world-cup"]
+            == "https://www.oddsportal.com/football/world/world-championship-2026/"
+        )

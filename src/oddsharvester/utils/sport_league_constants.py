@@ -37,7 +37,7 @@ SPORTS_LEAGUES_URLS_MAPPING = {
         "scotland-premiership": "https://www.oddsportal.com/football/scotland/premiership/",
         "switzerland-super-league": "https://www.oddsportal.com/football/switzerland/super-league/",
         "turkey-super-lig": "https://www.oddsportal.com/football/turkey/super-lig/",
-        "world-cup": "https://www.oddsportal.com/football/world/world-cup",
+        "world-cup": "https://www.oddsportal.com/football/world/world-championship-2026/",
         "croatia-hnl": "https://www.oddsportal.com/football/croatia/hnl/",
         "czech-republic-chance-liga": "https://www.oddsportal.com/football/czech-republic/chance-liga/",
         "slovakia-nike-liga": "https://www.oddsportal.com/football/slovakia/nike-liga/",
