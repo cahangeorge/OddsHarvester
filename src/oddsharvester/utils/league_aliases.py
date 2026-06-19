@@ -46,6 +46,11 @@ LEAGUE_SEASON_ALIASES: dict[Sport, dict[str, dict[int, str]]] = {
         "bulgaria-parva-liga": {
             2024: "parva-liga",
         },
+        # World Cup: current page is year-branded as world-championship-2026,
+        # while older tournament pages use world-cup-YYYY.
+        "world-cup": {
+            2022: "world-cup",
+        },
     },
 }
 

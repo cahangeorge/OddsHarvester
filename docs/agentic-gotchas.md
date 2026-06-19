@@ -270,9 +270,12 @@ working live page moved to `/football/world/world-championship-2026/`.
 
 **Fix pattern:** keep the stable CLI key (`world-cup`) and update only the URL
 value in `SPORTS_LEAGUES_URLS_MAPPING`, then pin the value in
-`tests/utils/test_sport_league_constants.py`. For current-tournament scraping we
-do **not** need a `LEAGUE_SEASON_ALIASES` entry unless historic season pages use
-different slugs and are a supported use case.
+`tests/utils/test_sport_league_constants.py`. Historic season pages do use a
+different slug: older editions are reachable as `world-cup-YYYY`, while the
+current tournament page is `world-championship-2026`. Keep
+`LEAGUE_SEASON_ALIASES[Sport.FOOTBALL]["world-cup"]` pinned so requests like
+`--league world-cup --season 2022` build `/football/world/world-cup-2022/results/`
+instead of the invalid `/world-championship-2026-2022/results/`.
 
 Validate handball slugs with `uv run python scripts/validate_league.py -s
 handball --all` (the project's hardened `PlaywrightManager` gets past the

@@ -38,6 +38,10 @@ class TestGetLeagueSlugForSeason:
             # Single year format
             (Sport.FOOTBALL, "czech-republic-chance-liga", "2023", "fortuna-liga"),
             (Sport.FOOTBALL, "czech-republic-chance-liga", "2024", None),
+            # World Cup: current tournament page is year-branded, older editions use world-cup-YYYY.
+            (Sport.FOOTBALL, "world-cup", "2018", "world-cup"),
+            (Sport.FOOTBALL, "world-cup", "2022", "world-cup"),
+            (Sport.FOOTBALL, "world-cup", "2026", None),
         ],
     )
     def test_alias_resolution(self, sport, league, season, expected_slug):

@@ -15,6 +15,7 @@ SPORTS_LEAGUES_URLS_MAPPING[Sport.FOOTBALL] = {
     "brazil-serie-a": f"{ODDSPORTAL_BASE_URL}/football/brazil/serie-a-betano",
     "south-africa-premiership": f"{ODDSPORTAL_BASE_URL}/football/south-africa/betway-premiership",
     "bulgaria-parva-liga": f"{ODDSPORTAL_BASE_URL}/football/bulgaria/efbet-league",
+    "world-cup": f"{ODDSPORTAL_BASE_URL}/football/world/world-championship-2026",
 }
 SPORTS_LEAGUES_URLS_MAPPING[Sport.TENNIS] = {
     "atp-tour": f"{ODDSPORTAL_BASE_URL}/tennis/atp-tour",
@@ -338,6 +339,18 @@ def test_get_league_url(sport, league, expected_url):
             "czech-republic-chance-liga",
             "2024",
             f"{ODDSPORTAL_BASE_URL}/football/czech-republic/chance-liga-2024/results/",
+        ),
+        (
+            "football",
+            "world-cup",
+            "2022",
+            f"{ODDSPORTAL_BASE_URL}/football/world/world-cup-2022/results/",
+        ),
+        (
+            "football",
+            "world-cup",
+            None,
+            f"{ODDSPORTAL_BASE_URL}/football/world/world-championship-2026/results/",
         ),
     ],
 )
