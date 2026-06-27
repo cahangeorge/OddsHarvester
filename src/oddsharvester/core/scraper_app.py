@@ -10,6 +10,7 @@ from oddsharvester.core.odds_portal_scraper import OddsPortalScraper
 from oddsharvester.core.playwright_manager import PlaywrightManager
 from oddsharvester.core.retry import RetryConfig, is_retryable_error, retry_with_backoff
 from oddsharvester.core.scrape_result import ScrapeResult
+from oddsharvester.core.scrapling_scraper import ScraplingUnavailableError, run_scrapling_scraper
 from oddsharvester.core.sport_market_registry import SportMarketRegistrar
 from oddsharvester.utils.bookies_filter_enum import BookiesFilter
 from oddsharvester.utils.command_enum import CommandEnum
@@ -20,6 +21,7 @@ from oddsharvester.utils.constants import (
     OPERATION_RETRY_MAX_DELAY,
 )
 from oddsharvester.utils.proxy_manager import ProxyManager
+from oddsharvester.utils.scraper_engine import SCRAPLING_ENGINES, ScraperEngine
 from oddsharvester.utils.utils import validate_and_convert_period
 
 logger = logging.getLogger("ScraperApp")
@@ -49,6 +51,7 @@ async def run_scraper(
     period: str | None = None,
     request_delay: float = DEFAULT_REQUEST_DELAY_S,
     concurrency_tasks: int = 3,
+    scraper_engine: str = ScraperEngine.PLAYWRIGHT.value,
 ) -> ScrapeResult | None:
     """
     Runs the scraping process and handles execution.
@@ -68,7 +71,7 @@ async def run_scraper(
         f"browser_locale_timezone={browser_locale_timezone}, browser_timezone_id={browser_timezone_id}, "
         f"scrape_odds_history={scrape_odds_history}, target_bookmaker={target_bookmaker}, "
         f"headless={headless}, preview_submarkets_only={preview_submarkets_only}, "
-        f"bookies_filter={bookies_filter}, period={period}, base_url={base_url}"
+        f"bookies_filter={bookies_filter}, period={period}, base_url={base_url}, scraper_engine={scraper_engine}"
     )
 
     if base_url:
@@ -87,6 +90,46 @@ async def run_scraper(
             )
 
     proxy_manager = ProxyManager(proxy_url=proxy_url, proxy_user=proxy_user, proxy_pass=proxy_pass)
+    proxy_config = proxy_manager.get_current_proxy()
+    normalized_engine = (scraper_engine or ScraperEngine.PLAYWRIGHT.value).lower()
+
+    if normalized_engine in SCRAPLING_ENGINES:
+        try:
+            scrapling_result = await run_scrapling_scraper(
+                engine=ScraperEngine.SCRAPLING_STEALTH.value
+                if normalized_engine == ScraperEngine.SCRAPLING_STEALTH.value
+                else ScraperEngine.SCRAPLING_HTTP.value,
+                scraper_options={
+                    "base_url": base_url,
+                    "locale": browser_locale_timezone,
+                    "timezone_id": browser_timezone_id,
+                    "proxy": proxy_config,
+                    "concurrency_tasks": concurrency_tasks,
+                    "request_delay": request_delay,
+                },
+                command=CommandEnum(command),
+                match_links=match_links,
+                sport=sport,
+                date_value=date,
+                leagues=leagues,
+                season=season,
+                markets=markets,
+                max_pages=max_pages,
+                target_bookmaker=target_bookmaker,
+                scrape_odds_history=scrape_odds_history,
+            )
+            if normalized_engine != ScraperEngine.AUTO.value or scrapling_result.success:
+                return scrapling_result
+            logger.warning("Scrapling auto engine returned no successful records; falling back to Playwright.")
+        except ScraplingUnavailableError as exc:
+            if normalized_engine != ScraperEngine.AUTO.value:
+                raise
+            logger.warning("Scrapling auto engine unavailable: %s; falling back to Playwright.", exc)
+        except Exception as exc:
+            if normalized_engine != ScraperEngine.AUTO.value:
+                raise
+            logger.warning("Scrapling auto engine failed: %s; falling back to Playwright.", exc, exc_info=True)
+
     SportMarketRegistrar.register_all_markets()
     playwright_manager = PlaywrightManager()
     cookie_dismisser = CookieDismisser()
@@ -111,7 +154,6 @@ async def run_scraper(
     )
 
     try:
-        proxy_config = proxy_manager.get_current_proxy()
         await scraper.start_playwright(
             headless=headless,
             browser_user_agent=browser_user_agent,

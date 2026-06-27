@@ -65,6 +65,7 @@ def historic(ctx, **kwargs):
                 period=kwargs.get("period"),
                 request_delay=kwargs.get("request_delay", 1.0),
                 concurrency_tasks=kwargs.get("concurrency_tasks", 3),
+                scraper_engine=kwargs.get("scraper_engine", "playwright"),
             )
         )
 

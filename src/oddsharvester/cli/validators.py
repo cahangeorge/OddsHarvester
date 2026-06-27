@@ -23,7 +23,7 @@ def validate_date(ctx, param, value):
         raise click.BadParameter(f"Invalid date format '{value}'. Expected YYYYMMDD (e.g., 20250227).") from None
 
     if parsed_date.date() < datetime.now().date():
-        click.echo(f"Warning: Date '{value}' is in the past.", err=True)
+        raise click.BadParameter(f"Date '{value}' must be today or in the future.")
 
     return value
 

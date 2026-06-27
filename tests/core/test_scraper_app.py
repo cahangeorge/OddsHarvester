@@ -263,6 +263,79 @@ async def test_run_scraper_historic_forwards_concurrency(
 
 
 @pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.run_scrapling_scraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_run_scraper_auto_engine_falls_back_to_playwright_when_scrapling_returns_no_data(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    scrapling_mock,
+    setup_mocks,
+):
+    """`scraper_engine=auto` should try Scrapling first and preserve Playwright fallback safety."""
+    scraper_mock = setup_mocks["scraper_mock"]
+    scraper_cls_mock.return_value = scraper_mock
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+    scrapling_mock.return_value = ScrapeResult()
+
+    result = await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        sport="football",
+        date="20991231",
+        markets=["1x2"],
+        headless=True,
+        scraper_engine="auto",
+    )
+
+    scrapling_mock.assert_called_once()
+    scraper_mock.scrape_upcoming.assert_called_once()
+    assert result == {"result": "upcoming_data"}
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.run_scrapling_scraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_run_scraper_forced_scrapling_engine_skips_playwright(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    scrapling_mock,
+    setup_mocks,
+):
+    """Forced Scrapling engines should not launch the legacy Playwright scraper."""
+    successful = ScrapeResult(
+        success=[{"home_team": "A", "away_team": "B"}],
+        stats=ScrapeStats(total_urls=1, successful=1),
+    )
+    scrapling_mock.return_value = successful
+
+    result = await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        sport="football",
+        date="20991231",
+        markets=["1x2"],
+        headless=True,
+        scraper_engine="scrapling-http",
+    )
+
+    scrapling_mock.assert_called_once()
+    scraper_cls_mock.assert_not_called()
+    assert result is successful
+
+
+@pytest.mark.asyncio
 @patch("oddsharvester.core.scraper_app.OddsPortalScraper")
 @patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
 @patch("oddsharvester.core.scraper_app.PlaywrightManager")
@@ -360,12 +433,12 @@ async def test_run_scraper_error_handling(sport_market_registrar_mock, proxy_man
     proxy_manager_instance.get_current_proxy.return_value = {"server": "test-proxy"}
     proxy_manager_mock.return_value = proxy_manager_instance
 
-    result = await run_scraper(
-        command=CommandEnum.HISTORIC, sport="football", leagues=["premier-league"], season="2023"
-    )
+    with pytest.raises(Exception, match="Playwright error"):
+        await run_scraper(
+            command=CommandEnum.HISTORIC, sport="football", leagues=["premier-league"], season="2023"
+        )
 
     scraper_mock.stop_playwright.assert_called_once()
-    assert result is None
 
 
 @pytest.mark.asyncio
