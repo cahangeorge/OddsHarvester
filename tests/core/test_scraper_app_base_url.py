@@ -1,5 +1,8 @@
+import asyncio
 import inspect
 import logging
+
+import pytest
 
 from oddsharvester.core import scraper_app
 
@@ -25,16 +28,15 @@ def test_run_scraper_forwards_base_url_to_scraper(monkeypatch):
 
     monkeypatch.setattr(scraper_app, "OddsPortalScraper", FakeScraper)
 
-    import asyncio
-
-    asyncio.run(
-        scraper_app.run_scraper(
-            command="scrape_upcoming",
-            sport="football",
-            date="2025-01-15",
-            base_url="https://www.centroquote.it",
+    with pytest.raises(RuntimeError, match="stop here"):
+        asyncio.run(
+            scraper_app.run_scraper(
+                command="scrape_upcoming",
+                sport="football",
+                date="2025-01-15",
+                base_url="https://www.centroquote.it",
+            )
         )
-    )
     assert captured["base_url"] == "https://www.centroquote.it"
 
 
@@ -50,9 +52,9 @@ def _run_until_start(monkeypatch, **kwargs):
             pass
 
     monkeypatch.setattr(scraper_app, "OddsPortalScraper", FakeScraper)
-    import asyncio
 
-    asyncio.run(scraper_app.run_scraper(command="scrape_upcoming", sport="football", date="2025-01-15", **kwargs))
+    with pytest.raises(RuntimeError, match="stop here"):
+        asyncio.run(scraper_app.run_scraper(command="scrape_upcoming", sport="football", date="2025-01-15", **kwargs))
 
 
 def test_warns_when_regional_base_url_and_no_locale(monkeypatch, caplog):

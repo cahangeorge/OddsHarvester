@@ -6,7 +6,7 @@
     },
     "activate": true,
     "scripts": {
-        "post-install": "playwright install chromium",
+        "post-install": "python -m playwright install chromium && python -m patchright install chromium",
         "post-sync": "source .venv/bin/activate"
     }
 }

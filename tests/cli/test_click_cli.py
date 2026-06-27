@@ -61,6 +61,7 @@ class TestCLIBasics:
         assert "--date" in result.output
         assert "--league" in result.output
         assert "--request-delay" in result.output
+        assert "--engine" in result.output
 
     def test_historic_help(self, runner):
         """Test historic command help."""
@@ -69,6 +70,7 @@ class TestCLIBasics:
         assert "--sport" in result.output
         assert "--season" in result.output
         assert "--max-pages" in result.output
+        assert "--engine" in result.output
 
 
 class TestUpcomingCommand:
@@ -188,6 +190,31 @@ class TestCommonOptions:
         )
         assert mock_run_scraper["historic"].called
         assert mock_run_scraper["historic"].call_args.kwargs.get("concurrency_tasks") == 7
+
+    def test_upcoming_engine_flag_forwarded_to_run_scraper(self, runner, mock_run_scraper):
+        """`--engine auto` on `upcoming` must reach run_scraper as scraper_engine='auto'."""
+        runner.invoke(cli, ["upcoming", "-s", "football", "-d", FUTURE_DATE, "--engine", "auto"])
+        assert mock_run_scraper["upcoming"].called
+        assert mock_run_scraper["upcoming"].call_args.kwargs.get("scraper_engine") == "auto"
+
+    def test_historic_engine_flag_forwarded_to_run_scraper(self, runner, mock_run_scraper):
+        """`--engine scrapling-http` on `historic` must reach run_scraper."""
+        runner.invoke(
+            cli,
+            [
+                "historic",
+                "-s",
+                "football",
+                "-l",
+                "england-premier-league",
+                "--season",
+                "2024",
+                "--engine",
+                "scrapling-http",
+            ],
+        )
+        assert mock_run_scraper["historic"].called
+        assert mock_run_scraper["historic"].call_args.kwargs.get("scraper_engine") == "scrapling-http"
 
     def test_invalid_proxy_url_format(self, runner, mock_run_scraper):
         """Test invalid proxy URL format."""

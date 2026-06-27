@@ -29,6 +29,7 @@ from oddsharvester.utils.period_constants import (
     TennisPeriod,
     VolleyballPeriod,
 )
+from oddsharvester.utils.scraper_engine import ScraperEngine
 
 
 def _get_all_periods():
@@ -214,6 +215,14 @@ def common_options(func):
         default=1.0,
         envvar="OH_REQUEST_DELAY",
         help="Delay in seconds between match requests (default: 1.0).",
+    )
+    @click.option(
+        "--engine",
+        "scraper_engine",
+        type=click.Choice([engine.value for engine in ScraperEngine], case_sensitive=False),
+        default=ScraperEngine.PLAYWRIGHT.value,
+        envvar="OH_ENGINE",
+        help="Scraper engine: playwright, auto, scrapling-http, or scrapling-stealth.",
     )
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
