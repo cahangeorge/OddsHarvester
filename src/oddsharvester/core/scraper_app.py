@@ -36,7 +36,7 @@ async def run_scraper(
     season: str | None = None,
     markets: list | None = None,
     max_pages: int | None = None,
-    proxy_url: str | None = None,
+    proxy_url: str | list[str] | tuple[str, ...] | None = None,
     proxy_user: str | None = None,
     proxy_pass: str | None = None,
     browser_user_agent: str | None = None,
@@ -52,6 +52,7 @@ async def run_scraper(
     request_delay: float = DEFAULT_REQUEST_DELAY_S,
     concurrency_tasks: int = 3,
     scraper_engine: str = ScraperEngine.PLAYWRIGHT.value,
+    include_started: bool = False,
 ) -> ScrapeResult | None:
     """
     Runs the scraping process and handles execution.
@@ -89,7 +90,11 @@ async def run_scraper(
                 base_url,
             )
 
-    proxy_manager = ProxyManager(proxy_url=proxy_url, proxy_user=proxy_user, proxy_pass=proxy_pass)
+    if isinstance(proxy_url, list | tuple):
+        proxy_manager = ProxyManager(proxy_urls=list(proxy_url), proxy_user=proxy_user, proxy_pass=proxy_pass)
+    else:
+        proxy_manager = ProxyManager(proxy_url=proxy_url, proxy_user=proxy_user, proxy_pass=proxy_pass)
+
     proxy_config = proxy_manager.get_current_proxy()
     normalized_engine = (scraper_engine or ScraperEngine.PLAYWRIGHT.value).lower()
 
@@ -159,7 +164,7 @@ async def run_scraper(
             browser_user_agent=browser_user_agent,
             browser_locale_timezone=browser_locale_timezone,
             browser_timezone_id=browser_timezone_id,
-            proxy=proxy_config,
+            proxy_manager=proxy_manager,
         )
 
         if match_links and sport:
@@ -248,6 +253,7 @@ async def run_scraper(
                         period=period_enum,
                         request_delay=request_delay,
                         concurrent_scraping_task=concurrency_tasks,
+                        include_started=include_started,
                     )
                 else:
                     return await _scrape_multiple_leagues(
@@ -263,6 +269,7 @@ async def run_scraper(
                         period=period_enum,
                         request_delay=request_delay,
                         concurrent_scraping_task=concurrency_tasks,
+                        include_started=include_started,
                     )
             else:
                 logger.info(f"""
@@ -282,6 +289,7 @@ async def run_scraper(
                     period=period_enum,
                     request_delay=request_delay,
                     concurrent_scraping_task=concurrency_tasks,
+                    include_started=include_started,
                 )
 
         else:

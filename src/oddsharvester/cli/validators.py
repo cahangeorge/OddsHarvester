@@ -8,7 +8,7 @@ import click
 
 from oddsharvester.core.sport_period_registry import SportPeriodRegistry
 from oddsharvester.utils.sport_league_constants import SPORTS_LEAGUES_URLS_MAPPING
-from oddsharvester.utils.sport_market_constants import Sport
+from oddsharvester.utils.sport_market_constants import FOOTBALL_UMBRELLA_MARKETS, Sport
 from oddsharvester.utils.utils import get_supported_markets
 
 
@@ -83,7 +83,8 @@ def validate_markets(ctx, param, value):
             return value
 
     supported = get_supported_markets(sport)
-    invalid = [m for m in value if m not in supported]
+    umbrella_tokens = FOOTBALL_UMBRELLA_MARKETS if sport is Sport.FOOTBALL else {}
+    invalid = [m for m in value if m not in supported and m not in umbrella_tokens]
 
     if invalid:
         raise click.BadParameter(
@@ -145,16 +146,26 @@ def validate_period(ctx, param, value):
 
 
 def validate_proxy_url(ctx, param, value):
-    """Validate proxy URL format."""
+    """Validate one or more proxy URLs (repeatable option → tuple).
+
+    Each URL may carry embedded credentials: scheme://[user:pass@]host:port.
+    """
     if not value:
-        return None
+        return value
 
-    proxy_pattern = re.compile(r"^(?P<scheme>https?|socks5|socks4)://(?P<host>[\w\.-]+):(?P<port>\d+)$")
+    proxy_pattern = re.compile(
+        r"^(?P<scheme>https?|socks5|socks4)://"
+        r"(?:(?P<user>[^:@/]+):(?P<pass>[^:@/]+)@)?"
+        r"(?P<host>[\w.-]+):(?P<port>\d+)$"
+    )
 
-    if not proxy_pattern.match(value):
-        raise click.BadParameter(
-            f"Invalid proxy URL '{value}'. Expected format: 'http[s]://host:port' or 'socks5://host:port'"
-        )
+    for url in value:
+        if not proxy_pattern.match(url):
+            raise click.BadParameter(
+                f"Invalid proxy URL '{url}'. Expected format: "
+                "'http[s]://host:port', 'socks5://host:port', or "
+                "'scheme://user:pass@host:port'"
+            )
 
     return value
 

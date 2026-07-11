@@ -20,7 +20,13 @@ from oddsharvester.core.browser.selection import (
 from oddsharvester.core.odds_portal_market_extractor import OddsPortalMarketExtractor
 from oddsharvester.core.odds_portal_selectors import OddsPortalSelectors
 from oddsharvester.core.playwright_manager import PlaywrightManager
-from oddsharvester.core.retry import RetryConfig, classify_error, is_retryable_error, retry_with_backoff
+from oddsharvester.core.retry import (
+    RetryConfig,
+    classify_error,
+    is_proxy_attributable_error,
+    is_retryable_error,
+    retry_with_backoff,
+)
 from oddsharvester.core.scrape_result import FailedUrl, ScrapeResult, ScrapeStats
 from oddsharvester.utils.bookies_filter_enum import BookiesFilter
 from oddsharvester.utils.constants import (
@@ -87,9 +93,9 @@ def _parse_date_header(header_text: str, tz_name: str | None = None) -> date | N
         text = text.split(" - ", 1)[0].strip()
 
     try:
-        tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
+        tz = ZoneInfo(tz_name) if tz_name else UTC
     except (ZoneInfoNotFoundError, ValueError):
-        tz = ZoneInfo("UTC")
+        tz = UTC
 
     now_date = datetime.now(tz).date()
 
@@ -148,6 +154,31 @@ def _is_offscreen_row(row) -> bool:
     return any(marker in style for marker in _OFFSCREEN_STYLE_MARKERS)
 
 
+_KICKOFF_TIME_RE = re.compile(r"^\d{1,2}:\d{2}$")
+
+
+def _row_has_started(row) -> bool:
+    """Return True if a listing-page event row is live or finished.
+
+    Two signals are needed because OddsPortal splits "started" state:
+    live flips `time-item` from HH:MM to a period marker; finished fills
+    `game-status-box`. See `docs/agentic-gotchas.md` §9. Fail-safe:
+    missing markers → False so DOM drift degrades open.
+    """
+    box = row.find(attrs={"data-testid": OddsPortalSelectors.EVENT_ROW_GAME_STATUS_BOX_TESTID})
+    if box and box.get_text(strip=True):
+        return True
+
+    time_el = row.find(attrs={"data-testid": OddsPortalSelectors.EVENT_ROW_TIME_ITEM_TESTID})
+    if time_el is None:
+        return False
+    p = time_el.find("p")
+    text = p.get_text(strip=True) if p else time_el.get_text(strip=True)
+    if not text:
+        return False
+    return not _KICKOFF_TIME_RE.match(text)
+
+
 def _extract_fragment_match_id(match_link: str) -> str | None:
     """
     Extract the URL fragment as a match id from a match link.
@@ -164,6 +195,23 @@ def _extract_fragment_match_id(match_link: str) -> str | None:
     if not fragment or "/" in fragment:
         return None
     return fragment
+
+
+def _join_static_info(static_info: Any) -> str | None:
+    """
+    Join OddsPortal `eventData.staticInfo` note labels into a single string.
+
+    `staticInfo` is a list of `{"name": <label>}` entries shown under the
+    match header (neutral venue, first leg, behind closed doors, broadcast
+    note, ...). It is None/absent on ordinary matches. Returns None when
+    there is no usable label to report.
+    """
+    if not static_info:
+        return None
+    names = [
+        stripped for item in static_info if isinstance(item, dict) and (stripped := str(item.get("name") or "").strip())
+    ]
+    return ", ".join(names) or None
 
 
 class BaseScraper:
@@ -188,8 +236,8 @@ class BaseScraper:
             scroller (PageScroller): Handles incremental page scrolling.
             cookie_dismisser (CookieDismisser): Handles cookie banner dismissal.
             selection_manager (SelectionManager): Manages bookies filter and period selection.
-            preview_submarkets_only (bool): If True, only scrape average odds from visible submarkets without loading
-            individual bookmaker details.
+            preview_submarkets_only (bool): If True, only scrape the collapsed submarket odds (best/highest shown
+            per line, not per-bookmaker) from visible submarkets without loading individual bookmaker details.
             base_url (str | None): Regional OddsPortal domain override (scheme+host). When None, the canonical
             https://www.oddsportal.com is used.
         """
@@ -201,6 +249,7 @@ class BaseScraper:
         self.selection_manager = selection_manager
         self.preview_submarkets_only = preview_submarkets_only
         self.base_url = base_url
+        self._warmed_proxy_keys: set[str] = set()
 
     async def set_odds_format(self, page: Page, odds_format: OddsFormat = OddsFormat.DECIMAL_ODDS):
         """
@@ -253,7 +302,12 @@ class BaseScraper:
         except Exception as e:
             self.logger.error(f"Error while setting odds format: {e}", exc_info=True)
 
-    async def extract_match_links(self, page: Page, date_filter: date | None = None) -> list[str]:
+    async def extract_match_links(
+        self,
+        page: Page,
+        date_filter: date | None = None,
+        skip_started: bool = False,
+    ) -> list[str]:
         """
         Extract and parse match links from the current page.
 
@@ -269,6 +323,8 @@ class BaseScraper:
             date_filter (Optional[date]): If provided, keep only match links
                 whose surrounding date-header matches this date. Rows under a
                 date-header that cannot be parsed are kept (fail-safe).
+            skip_started (bool): If True, drop rows that are live or finished
+                (see `_row_has_started` for detection). Fail-safe on DOM drift.
 
         Returns:
             List[str]: A list of unique match links found on the page.
@@ -286,9 +342,11 @@ class BaseScraper:
             seen: set[str] = set()
             match_links: list[str] = []
             current_row_date: date | None = None
+            seen_header_dates: set[date] = set()
             filtered_out_count = 0
             unparseable_header_count = 0
             offscreen_skipped_count = 0
+            started_filtered_out_count = 0
 
             for row in event_rows:
                 if _is_offscreen_row(row):
@@ -305,11 +363,17 @@ class BaseScraper:
                             self.logger.warning(
                                 f"Could not parse date-header '{header_text}'; rows under it will not be filtered."
                             )
+                        else:
+                            seen_header_dates.add(parsed)
                         current_row_date = parsed
 
                     if current_row_date is not None and current_row_date != date_filter:
                         filtered_out_count += 1
                         continue
+
+                if skip_started and _row_has_started(row):
+                    started_filtered_out_count += 1
+                    continue
 
                 for link in row.find_all("a", href=True):
                     href = link["href"]
@@ -320,17 +384,29 @@ class BaseScraper:
                         seen.add(full_url)
                         match_links.append(full_url)
 
+            started_suffix = f", {started_filtered_out_count} started/finished rows skipped" if skip_started else ""
             if date_filter is not None:
                 self.logger.info(
                     f"Extracted {len(match_links)} unique match links after date filtering "
                     f"(filter={date_filter.isoformat()}, filtered out {filtered_out_count} rows, "
                     f"{unparseable_header_count} unparseable headers, "
-                    f"{offscreen_skipped_count} offscreen rows skipped)."
+                    f"{offscreen_skipped_count} offscreen rows skipped"
+                    f"{started_suffix})."
                 )
+                if not match_links and filtered_out_count:
+                    headers_label = ", ".join(d.isoformat() for d in sorted(seen_header_dates)) or "none"
+                    self.logger.warning(
+                        f"Date filter {date_filter.isoformat()} matched 0 matches although "
+                        f"{filtered_out_count} rows were present under other dates. Date headers "
+                        f"on the page (grouped in browser timezone '{tz_name or 'UTC'}'): {headers_label}. "
+                        f"If the expected matches kick off late and land on an adjacent calendar day, "
+                        f"pass --timezone to align the listing with the competition's region."
+                    )
             else:
                 self.logger.info(
                     f"Extracted {len(match_links)} unique match links "
-                    f"({offscreen_skipped_count} offscreen rows skipped)."
+                    f"({offscreen_skipped_count} offscreen rows skipped"
+                    f"{started_suffix})."
                 )
 
             return match_links
@@ -338,6 +414,31 @@ class BaseScraper:
         except Exception as e:
             self.logger.error(f"Error extracting match links: {e}", exc_info=True)
             return []
+
+    async def _warm_proxy_contexts(self):
+        """Warm each non-default proxy context once.
+
+        Odds format and cookie consent are per-context state. Without this, match
+        pages loaded on a fresh proxy context would render with the wrong odds
+        format, silently corrupting odds values.
+        """
+        for key in self.playwright_manager.non_default_context_keys():
+            if key in self._warmed_proxy_keys:
+                continue
+            self._warmed_proxy_keys.add(key)
+            page = None
+            try:
+                page = await self.playwright_manager.new_page_on_key(key)
+                await page.goto(ODDSPORTAL_BASE_URL, timeout=NAVIGATION_TIMEOUT_MS, wait_until="domcontentloaded")
+                await self.cookie_dismisser.dismiss(page=page)
+                await self.set_odds_format(page=page)
+                self.logger.info(f"Warmed proxy context: {key}")
+            except Exception as e:
+                self.logger.warning(f"Failed to warm proxy context {key}: {e}. Removing proxy from rotation.")
+                self.playwright_manager.blacklist_proxy(key)
+            finally:
+                if page:
+                    await page.close()
 
     async def extract_match_odds(
         self,
@@ -363,8 +464,8 @@ class BaseScraper:
             scrape_odds_history (bool): Whether to scrape and attach odds history.
             target_bookmaker (str): If set, only scrape odds for this bookmaker.
             concurrent_scraping_task (int): Controls how many pages are processed simultaneously.
-            preview_submarkets_only (bool): If True, only scrape average odds from visible submarkets without loading
-            individual bookmaker details.
+            preview_submarkets_only (bool): If True, only scrape the collapsed submarket odds (best/highest shown
+            per line, not per-bookmaker) from visible submarkets without loading individual bookmaker details.
             bookies_filter (BookiesFilter): The bookmaker filter to apply.
             period: The period to scrape odds for.
             retry_config: Configuration for per-match retry behavior.
@@ -372,6 +473,8 @@ class BaseScraper:
         Returns:
             ScrapeResult: Contains successful results, failed URLs with error details, and statistics.
         """
+        await self._warm_proxy_contexts()
+
         self.logger.info(f"Starting to scrape odds for {len(match_links)} match links...")
 
         result = ScrapeResult(stats=ScrapeStats(total_urls=len(match_links)))
@@ -412,9 +515,10 @@ class BaseScraper:
                     await asyncio.sleep(total_delay)
 
                 tab = None
+                proxy_key = None
 
                 try:
-                    tab = await self.playwright_manager.context.new_page()
+                    tab, proxy_key = await self.playwright_manager.new_rotated_page()
 
                     # Use retry with backoff for each match
                     retry_result = await retry_with_backoff(
@@ -426,6 +530,7 @@ class BaseScraper:
 
                     if retry_result.success and retry_result.result is not None:
                         self.logger.info(f"Successfully scraped match link: {link} (attempts: {retry_result.attempts})")
+                        self.playwright_manager.report_page_result(proxy_key, is_proxy_failure=False)
                         return (link, retry_result.result, None)
                     else:
                         # Scraping failed after retries
@@ -440,6 +545,9 @@ class BaseScraper:
                         self.logger.warning(
                             f"Failed to scrape {link} after {retry_result.attempts} attempts: {retry_result.last_error}"
                         )
+                        self.playwright_manager.report_page_result(
+                            proxy_key, is_proxy_failure=is_proxy_attributable_error(error_type)
+                        )
                         return (link, None, failed_url)
 
                 except Exception as e:
@@ -453,6 +561,11 @@ class BaseScraper:
                         is_retryable=is_retryable_error(error_message),
                     )
                     self.logger.error(f"Unexpected error scraping {link}: {e}")
+                    if proxy_key is not None:
+                        self.playwright_manager.report_page_result(
+                            proxy_key,
+                            is_proxy_failure=is_proxy_attributable_error(classify_error(error_message)),
+                        )
                     return (link, None, failed_url)
 
                 finally:
@@ -513,8 +626,8 @@ class BaseScraper:
             markets (Optional[List[str]]): A list of markets to scrape (e.g., ['1x2', 'over_under_2_5']).
             scrape_odds_history (bool): Whether to scrape and attach odds history.
             target_bookmaker (str): If set, only scrape odds for this bookmaker.
-            preview_submarkets_only (bool): If True, only scrape average odds from visible submarkets without loading
-            individual bookmaker details.
+            preview_submarkets_only (bool): If True, only scrape the collapsed submarket odds (best/highest shown
+            per line, not per-bookmaker) from visible submarkets without loading individual bookmaker details.
             bookies_filter (BookiesFilter): The bookmaker filter to apply.
             period: The period enum to scrape odds for (FootballPeriod, TennisPeriod, or BasketballPeriod).
 
@@ -523,10 +636,13 @@ class BaseScraper:
         """
         self.logger.info(f"Scraping match: {match_link}")
 
-        try:
-            # Navigate to the match page with extended timeout
-            await page.goto(match_link, timeout=NAVIGATION_TIMEOUT_MS, wait_until="domcontentloaded")
+        # Navigation is the proxy-sensitive step: let its failures propagate so
+        # retry/backoff and multi-proxy failover can attribute them to the proxy.
+        # Errors after a successful load are content/DOM issues and must not
+        # blacklist a proxy, so they stay swallowed to None below.
+        await page.goto(match_link, timeout=NAVIGATION_TIMEOUT_MS, wait_until="domcontentloaded")
 
+        try:
             # Wait a bit for dynamic content to load
             await page.wait_for_timeout(DYNAMIC_CONTENT_WAIT_MS)
 
@@ -587,7 +703,7 @@ class BaseScraper:
             return ZoneInfo(tz_id)
         except ZoneInfoNotFoundError:
             self.logger.warning(f"Unknown timezone '{tz_id}', falling back to UTC for DOM date parsing")
-            return ZoneInfo("UTC")
+            return UTC
 
     def _parse_match_date_from_dom(self, soup: BeautifulSoup) -> str | None:
         """
@@ -904,6 +1020,7 @@ class BaseScraper:
                 if event_body.get("venueTown")
                 else None,
                 "venue_country": event_body.get("venueCountry"),
+                "match_info": _join_static_info(event_data.get("staticInfo")),
             }
 
         except Exception as e:

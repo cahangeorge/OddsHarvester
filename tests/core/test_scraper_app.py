@@ -73,7 +73,7 @@ async def test_run_scraper_historic(
         browser_user_agent=None,
         browser_locale_timezone=None,
         browser_timezone_id=None,
-        proxy={"server": "test-proxy"},
+        proxy_manager=proxy_manager_instance,
     )
 
     scraper_mock.scrape_historic.assert_called_once_with(
@@ -133,7 +133,7 @@ async def test_run_scraper_upcoming(
         browser_user_agent="custom-agent",
         browser_locale_timezone="Europe/Paris",
         browser_timezone_id=None,
-        proxy={"server": "test-proxy"},
+        proxy_manager=proxy_manager_instance,
     )
 
     scraper_mock.scrape_upcoming.assert_called_once_with(
@@ -147,6 +147,7 @@ async def test_run_scraper_upcoming(
         period=ANY,
         request_delay=ANY,
         concurrent_scraping_task=ANY,
+        include_started=False,
     )
 
     assert result == {"result": "upcoming_data"}
@@ -201,6 +202,40 @@ async def test_run_scraper_match_links(
 
 
 @pytest.mark.asyncio
+async def test_run_scraper_builds_multi_proxy_manager(monkeypatch):
+    """run_scraper(proxy_url=<tuple>) must build a single ProxyManager in multi-proxy mode
+    and pass it (not a proxy dict) to start_playwright (issue: multi-proxy rotation)."""
+    from oddsharvester.core import scraper_app
+
+    captured = {}
+
+    class DummyScraper:
+        def __init__(self, *a, **k):
+            pass
+
+        async def start_playwright(self, **kwargs):
+            captured["proxy_manager"] = kwargs.get("proxy_manager")
+
+        async def scrape_upcoming(self, *a, **k):
+            return ScrapeResult()
+
+        async def stop_playwright(self):
+            pass
+
+    monkeypatch.setattr(scraper_app, "OddsPortalScraper", DummyScraper)
+
+    await scraper_app.run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        sport="football",
+        date="20250101",
+        markets=["1x2"],
+        proxy_url=("http://a.example.com:1", "http://b.example.com:2"),
+    )
+
+    assert captured["proxy_manager"].is_multi_proxy() is True
+
+
+@pytest.mark.asyncio
 @patch("oddsharvester.core.scraper_app.OddsPortalScraper")
 @patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
 @patch("oddsharvester.core.scraper_app.PlaywrightManager")
@@ -229,6 +264,36 @@ async def test_run_scraper_upcoming_forwards_concurrency(
     )
 
     assert scraper_mock.scrape_upcoming.call_args.kwargs.get("concurrent_scraping_task") == 10
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_run_scraper_upcoming_forwards_include_started(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    setup_mocks,
+):
+    """run_scraper(include_started=True) must forward include_started=True to scrape_upcoming (issue #58)."""
+    scraper_mock = setup_mocks["scraper_mock"]
+    scraper_cls_mock.return_value = scraper_mock
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+
+    await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        sport="football",
+        date="20260601",
+        markets=["1x2"],
+        include_started=True,
+    )
+
+    assert scraper_mock.scrape_upcoming.call_args.kwargs.get("include_started") is True
 
 
 @pytest.mark.asyncio
