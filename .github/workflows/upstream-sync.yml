@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
 
 concurrency:
   group: upstream-sync
@@ -28,8 +27,6 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch upstream and initialise managed branches
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -46,9 +43,6 @@ jobs:
             git push origin "${PLATFORM_BRANCH}"
           fi
 
-          # This branch is an audit mirror only. Never force-push a source branch.
-          git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/upstream-master"
-
           if git log --format=%H "origin/${PLATFORM_BRANCH}..upstream/${UPSTREAM_BRANCH}" | grep -q .; then
             echo 'changes=true' >> "$GITHUB_OUTPUT"
           else
@@ -59,21 +53,16 @@ jobs:
       - name: Prepare a merge candidate
         if: steps.upstream.outputs.changes == 'true'
         id: candidate
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           branch="sync/upstream-${GITHUB_RUN_ID}"
           git checkout -B "$branch" "origin/${PLATFORM_BRANCH}"
           if ! git merge --no-commit --no-ff "upstream/${UPSTREAM_BRANCH}"; then
             git merge --abort || true
-            if [ "$(gh issue list --state open --search 'Upstream sync conflict in:title' --json number --jq 'length')" = '0' ]; then
-              gh issue create \
-                --title 'Upstream sync conflict' \
-                --body "The scheduled upstream sync could not merge ${UPSTREAM_REPOSITORY}@${UPSTREAM_BRANCH} into ${PLATFORM_BRANCH}. No platform branch was changed. Inspect the failed run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
-            fi
             exit 1
           fi
+          # Keep the platform's reviewed Actions configuration out of upstream syncs.
+          git checkout "origin/${PLATFORM_BRANCH}" -- .github/workflows
           git commit -m "chore(sync): merge upstream ${UPSTREAM_BRANCH}"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
