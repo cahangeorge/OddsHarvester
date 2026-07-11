@@ -1,0 +1,126 @@
+name: Safely sync upstream
+
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  BOOTSTRAP_BRANCH: codex-bet-platform-scraper-engine
+  PLATFORM_BRANCH: platform
+  UPSTREAM_BRANCH: master
+  UPSTREAM_REPOSITORY: jordantete/OddsHarvester
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.UPSTREAM_SYNC_APP_ID }}
+          private-key: ${{ secrets.UPSTREAM_SYNC_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Fetch upstream and initialise managed branches
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags upstream "refs/heads/${UPSTREAM_BRANCH}:refs/remotes/upstream/${UPSTREAM_BRANCH}"
+
+          if git ls-remote --exit-code --heads origin "${PLATFORM_BRANCH}" >/dev/null 2>&1; then
+            git fetch origin "refs/heads/${PLATFORM_BRANCH}:refs/remotes/origin/${PLATFORM_BRANCH}"
+            git checkout -B "${PLATFORM_BRANCH}" "origin/${PLATFORM_BRANCH}"
+          else
+            git fetch origin "refs/heads/${BOOTSTRAP_BRANCH}:refs/remotes/origin/${BOOTSTRAP_BRANCH}"
+            git checkout -B "${PLATFORM_BRANCH}" "origin/${BOOTSTRAP_BRANCH}"
+            git push origin "${PLATFORM_BRANCH}"
+          fi
+
+          # This branch is an audit mirror only. Never force-push a source branch.
+          git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/upstream-master"
+
+          if [ -n "$(gh pr list --base "${PLATFORM_BRANCH}" --state open --label upstream-sync --json url --jq '.[0].url')" ]; then
+            echo 'changes=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git log --format=%H "origin/${PLATFORM_BRANCH}..upstream/${UPSTREAM_BRANCH}" | grep -q .; then
+            echo 'changes=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changes=false' >> "$GITHUB_OUTPUT"
+          fi
+        id: upstream
+
+      - name: Prepare a merge candidate
+        if: steps.upstream.outputs.changes == 'true'
+        id: candidate
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          branch="sync/upstream-${GITHUB_RUN_ID}"
+          git checkout -B "$branch" "origin/${PLATFORM_BRANCH}"
+          if ! git merge --no-commit --no-ff "upstream/${UPSTREAM_BRANCH}"; then
+            git merge --abort || true
+            if [ "$(gh issue list --state open --search 'Upstream sync conflict in:title' --json number --jq 'length')" = '0' ]; then
+              gh issue create \
+                --title 'Upstream sync conflict' \
+                --body "The scheduled upstream sync could not merge ${UPSTREAM_REPOSITORY}@${UPSTREAM_BRANCH} into ${PLATFORM_BRANCH}. No platform branch was changed. Inspect the failed run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+            fi
+            exit 1
+          fi
+          git commit -m "chore(sync): merge upstream ${UPSTREAM_BRANCH}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v7
+        if: steps.upstream.outputs.changes == 'true'
+
+      - uses: actions/setup-python@v6
+        if: steps.upstream.outputs.changes == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install test system dependencies
+        if: steps.upstream.outputs.changes == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libxslt-dev python3-dev build-essential
+
+      - name: Validate merge candidate
+        if: steps.upstream.outputs.changes == 'true'
+        run: |
+          uv sync --all-extras --dev
+          uv run playwright install chromium
+          uv run pytest --cov=src/oddsharvester --cov-report=xml:coverage.xml --cov-report=term
+
+      - name: Open a checked sync pull request
+        if: steps.upstream.outputs.changes == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git push origin "${{ steps.candidate.outputs.branch }}"
+          gh label create upstream-sync --color 0366d6 --description 'Automated upstream merge candidate' --force
+          pr_url="$(gh pr create \
+            --base "${PLATFORM_BRANCH}" \
+            --head "${{ steps.candidate.outputs.branch }}" \
+            --label upstream-sync \
+            --title 'chore(sync): merge upstream master' \
+            --body "Automated, tested merge from ${UPSTREAM_REPOSITORY}@${UPSTREAM_BRANCH}. The upstream snapshot is recorded on upstream-master.")"
+          gh pr merge --auto --merge "$pr_url" || echo '::warning::Auto-merge is unavailable; the tested sync PR remains open.'

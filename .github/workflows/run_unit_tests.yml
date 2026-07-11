@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - master
+      - platform
   pull_request:
     branches:
       - master
+      - platform
 
 jobs:
   test:
