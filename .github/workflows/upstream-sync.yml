@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  issues: write
 
 concurrency:
   group: upstream-sync
@@ -22,20 +23,13 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ vars.UPSTREAM_SYNC_APP_ID }}
-          private-key: ${{ secrets.UPSTREAM_SYNC_APP_PRIVATE_KEY }}
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
 
       - name: Fetch upstream and initialise managed branches
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -55,11 +49,6 @@ jobs:
           # This branch is an audit mirror only. Never force-push a source branch.
           git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/upstream-master"
 
-          if [ -n "$(gh pr list --base "${PLATFORM_BRANCH}" --state open --label upstream-sync --json url --jq '.[0].url')" ]; then
-            echo 'changes=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           if git log --format=%H "origin/${PLATFORM_BRANCH}..upstream/${UPSTREAM_BRANCH}" | grep -q .; then
             echo 'changes=true' >> "$GITHUB_OUTPUT"
           else
@@ -71,7 +60,7 @@ jobs:
         if: steps.upstream.outputs.changes == 'true'
         id: candidate
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           branch="sync/upstream-${GITHUB_RUN_ID}"
@@ -109,18 +98,8 @@ jobs:
           uv run playwright install chromium
           uv run pytest --cov=src/oddsharvester --cov-report=xml:coverage.xml --cov-report=term
 
-      - name: Open a checked sync pull request
+      - name: Publish the tested synchronization
         if: steps.upstream.outputs.changes == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          git push origin "${{ steps.candidate.outputs.branch }}"
-          gh label create upstream-sync --color 0366d6 --description 'Automated upstream merge candidate' --force
-          pr_url="$(gh pr create \
-            --base "${PLATFORM_BRANCH}" \
-            --head "${{ steps.candidate.outputs.branch }}" \
-            --label upstream-sync \
-            --title 'chore(sync): merge upstream master' \
-            --body "Automated, tested merge from ${UPSTREAM_REPOSITORY}@${UPSTREAM_BRANCH}. The upstream snapshot is recorded on upstream-master.")"
-          gh pr merge --auto --merge "$pr_url" || echo '::warning::Auto-merge is unavailable; the tested sync PR remains open.'
+          git push origin "HEAD:refs/heads/${PLATFORM_BRANCH}"
