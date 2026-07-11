@@ -58,8 +58,13 @@ jobs:
           branch="sync/upstream-${GITHUB_RUN_ID}"
           git checkout -B "$branch" "origin/${PLATFORM_BRANCH}"
           if ! git merge --no-commit --no-ff "upstream/${UPSTREAM_BRANCH}"; then
-            git merge --abort || true
-            exit 1
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            if [ -z "$conflicts" ] || printf '%s\n' "$conflicts" | grep -qv '^\.github/workflows/'; then
+              git merge --abort || true
+              exit 1
+            fi
+            git checkout --ours -- .github/workflows
+            git add .github/workflows
           fi
           # Keep the platform's reviewed Actions configuration out of upstream syncs.
           git checkout "origin/${PLATFORM_BRANCH}" -- .github/workflows
