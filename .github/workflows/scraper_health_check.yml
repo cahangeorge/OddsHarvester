@@ -4,15 +4,12 @@ on:
   schedule:
     - cron: "0 11 * * 1" # Runs every Monday at 11:00 UTC
   workflow_dispatch: # Allows manual execution
-  push:
-    paths:
-      - "tests/test_website_layout.py"
-      - "tests/test_website_config.py"
 
 jobs:
   test_scraper:
     name: Run Scraper Health Check
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout code
@@ -46,22 +43,46 @@ jobs:
       - name: Install Playwright Chromium Browser
         run: uv run playwright install chromium
 
-      - name: Run scraper layout tests
+      - name: Run bounded live canaries
+        env:
+          CANARY_MATCH_URL: https://www.oddsportal.com/football/england/premier-league/leicester-brentford-xQ77QTN0
         run: |
-          echo "🌐 Running multi-sport layout tests..."
-          uv run pytest tests/test_website_layout.py::test_match_layout_integrity -v || {
-            echo "⚠️ Multi-sport tests failed"
-            exit 0
-          }
+          set -euo pipefail
+          mkdir -p health-artifacts
 
-          echo "🔍 Running individual sport tests..."
-          uv run pytest tests/test_website_layout.py::test_individual_sport_functionality -v || {
-            echo "⚠️ Individual sport tests failed"
-            exit 0
-          }
+          timeout 10m uv run oddsharvester upcoming \
+            --sport football \
+            --match-link "$CANARY_MATCH_URL" \
+            --market 1x2 \
+            --preview-only \
+            --headless \
+            --concurrency 1 \
+            --request-delay 0 \
+            --engine playwright \
+            --output health-artifacts/upcoming-matches \
+            --report-output health-artifacts/upcoming-report.json
 
-          echo "📊 Test Summary:"
-          echo "✅ Configuration tests completed"
-          echo "✅ Multi-sport layout tests completed"
-          echo "✅ Individual sport tests completed"
-          echo "🎉 All OddsPortal layout tests passed!"
+          timeout 10m uv run oddsharvester historic \
+            --sport football \
+            --match-link "$CANARY_MATCH_URL" \
+            --season 2024-2025 \
+            --market 1x2 \
+            --preview-only \
+            --headless \
+            --concurrency 1 \
+            --request-delay 0 \
+            --engine auto \
+            --output health-artifacts/historic-matches \
+            --report-output health-artifacts/historic-report.json
+
+          uv run python scripts/verify_health_report.py \
+            health-artifacts/upcoming-report.json \
+            health-artifacts/historic-report.json
+
+      - name: Upload health evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: scraper-health-${{ github.run_id }}
+          path: health-artifacts/
+          if-no-files-found: warn

@@ -71,6 +71,14 @@ oddsharvester historic -s football -l england-premier-league --season 2024-2025 
 
 100+ leagues supported across all sports: Premier League, La Liga, Serie A, NBA, NFL, MLB, NHL, ATP/WTA Grand Slams, and [many more](src/oddsharvester/utils/sport_league_constants.py).
 
+To discover football leagues exposed by the current live listing without treating them as automatically supported, run:
+
+```bash
+uv run python scripts/discover_football_catalog.py --output artifacts/football-candidates.json
+```
+
+The generated entries are deliberately marked `validation_pending`. Validate each candidate's results page before adding it to the supported league constants or another platform catalog.
+
 ---
 
 ## CLI Usage
@@ -149,7 +157,15 @@ oddsharvester historic -s football -l england-premier-league --season 2023-2024 
 | `--storage` |       | `local` or `remote` (S3)                                                   | `local`        |
 | `--format`  | `-f`  | `json` or `csv`                                                            | `json`         |
 | `--output`  | `-o`  | Output file path                                                           | `scraped_data` |
+| `--report-output` | | Exact path for an additive, versioned JSON run report                      | —              |
 | `--append`  |       | Append to the output file instead of overwriting it (`--no-append` to opt out explicitly) | `--no-append`  |
+
+`--report-output` does not change the primary JSON/CSV payload: the main output remains the same list of scraped match records. The separate report is intended for automation and contains `schema_version`, command status, requested/used engines, source inputs, locale, timezone, numeric stats, detailed failures, warnings, and UTC timing. Reports currently use schema version `1.0`.
+
+```bash
+oddsharvester upcoming -s football -l england-premier-league -m 1x2 --headless \
+  --output artifacts/matches --report-output artifacts/run-report.json
+```
 
 #### Browser & Scraping Options
 
@@ -230,6 +246,7 @@ All CLI options can be set via environment variables — useful for Docker or CI
 | `OH_STORAGE`       | `--storage`       | Storage type (local/remote)  |
 | `OH_FORMAT`        | `--format`        | Output format (json/csv)     |
 | `OH_FILE_PATH`     | `--output`        | Output file path             |
+| `OH_REPORT_OUTPUT` | `--report-output` | Versioned JSON report path   |
 | `OH_APPEND`        | `--append`        | Append to the output file instead of overwriting |
 | `OH_HEADLESS`      | `--headless`      | Run in headless mode         |
 | `OH_CONCURRENCY`   | `--concurrency`   | Number of concurrent tasks   |
@@ -251,6 +268,12 @@ export OH_PROXY_URL=http://proxy.example.com:8080
 
 oddsharvester upcoming -d 20250301 -m 1x2
 ```
+
+---
+
+## Scheduled scraper health
+
+The weekly `Scraper Health Check` workflow runs configuration tests followed by one bounded `upcoming` and one bounded `historic` live canary against a single match URL. Each canary has a ten-minute process timeout, the job has a 25-minute timeout, and failures are not converted to successful exits. The workflow verifies that both versioned reports contain at least one clean successful match and uploads the primary outputs and reports as run evidence even when a canary fails.
 
 ---
 

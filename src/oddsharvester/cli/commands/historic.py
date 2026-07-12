@@ -1,12 +1,14 @@
 """CLI command for scraping historical matches."""
 
 import asyncio
+from datetime import UTC, datetime
 import logging
 import sys
 
 import click
 
 from oddsharvester.cli.options import common_options
+from oddsharvester.cli.scrape_report import write_scrape_report
 from oddsharvester.cli.validators import validate_max_pages, validate_season
 from oddsharvester.core.scraper_app import run_scraper
 from oddsharvester.storage.storage_manager import store_data
@@ -38,6 +40,9 @@ def historic(ctx, **kwargs):
     bookies_filter = kwargs.get("bookies_filter")
     season = kwargs.get("season")
     sport_value = sport.value if isinstance(sport, Sport) else sport
+    requested_engine = kwargs.get("scraper_engine", "playwright")
+    started_at = datetime.now(UTC)
+    scraped_data = None
 
     try:
         scraped_data = asyncio.run(
@@ -65,9 +70,10 @@ def historic(ctx, **kwargs):
                 period=kwargs.get("period"),
                 request_delay=kwargs.get("request_delay", 1.0),
                 concurrency_tasks=kwargs.get("concurrency_tasks", 3),
-                scraper_engine=kwargs.get("scraper_engine", "playwright"),
+                scraper_engine=requested_engine,
             )
         )
+        _write_report(kwargs, scraped_data, sport_value, requested_engine, started_at)
 
         if scraped_data and scraped_data.success:
             store_data(
@@ -88,5 +94,40 @@ def historic(ctx, **kwargs):
             sys.exit(1)
 
     except Exception as e:
+        if kwargs.get("report_output"):
+            _write_report(
+                kwargs,
+                scraped_data,
+                sport_value,
+                requested_engine,
+                started_at,
+                exception_type=type(e).__name__,
+            )
         logger.error(f"Error during scraping: {e}", exc_info=True)
         sys.exit(1)
+
+
+def _write_report(kwargs, scraped_data, sport, requested_engine, started_at, exception_type=None):
+    if not kwargs.get("report_output"):
+        return
+    write_scrape_report(
+        kwargs["report_output"],
+        command="historic",
+        result=scraped_data,
+        requested_engine=requested_engine,
+        source={
+            "sport": sport,
+            "date": None,
+            "leagues": list(kwargs.get("leagues") or []),
+            "markets": list(kwargs.get("markets") or []),
+            "season": kwargs.get("season"),
+            "match_links": list(kwargs.get("match_links") or []),
+            "max_pages": kwargs.get("max_pages"),
+            "base_url": kwargs.get("base_url") or "https://www.oddsportal.com",
+        },
+        locale=kwargs.get("browser_locale_timezone"),
+        timezone=kwargs.get("browser_timezone_id"),
+        started_at=started_at,
+        finished_at=datetime.now(UTC),
+        exception_type=exception_type,
+    )

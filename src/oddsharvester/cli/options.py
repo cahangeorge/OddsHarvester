@@ -106,6 +106,13 @@ def common_options(func):
         help="Output file path.",
     )
     @click.option(
+        "--report-output",
+        type=click.Path(),
+        callback=validate_file_path,
+        envvar="OH_REPORT_OUTPUT",
+        help="Write a versioned JSON run report to this exact path.",
+    )
+    @click.option(
         "--append/--no-append",
         default=False,
         envvar="OH_APPEND",

@@ -1,0 +1,19 @@
+{
+  "groups": [
+    {
+      "country": "Australia",
+      "competitions": [
+        {"href": "/football/australia/a-league/"},
+        {"url": "https://www.oddsportal.com/football/australia/npl-victoria/"}
+      ]
+    },
+    {
+      "country": "England",
+      "items": [
+        {"link": "/football/england/premier-league/"},
+        {"link": "/football/england/premier-league/results/"}
+      ]
+    }
+  ],
+  "ignored": "https://not-oddsportal.example/football/australia/npl-queensland/"
+}
