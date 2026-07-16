@@ -8,7 +8,10 @@ then became "chance-liga" from 2024-2025 onwards.
 This module provides a mapping to resolve the correct URL slug for a given season.
 """
 
+import json
+import os
 import re
+from urllib.parse import urlsplit
 
 from .sport_market_constants import Sport
 
@@ -55,6 +58,48 @@ LEAGUE_SEASON_ALIASES: dict[Sport, dict[str, dict[int, str]]] = {
 }
 
 
+def runtime_football_season_alias(raw: str | None, league: str, season: str | None) -> str | None:
+    """Read an exact season alias that was verified immediately before a scrape."""
+    if not raw or not season:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    by_league = payload.get(league)
+    alias = by_league.get(season) if isinstance(by_league, dict) else None
+    return alias if isinstance(alias, str) and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", alias) else None
+
+
+def runtime_football_historic_url(raw: str | None, league: str, season: str | None) -> str | None:
+    """Read an exact Results URL that was rendered and validated for this job."""
+    if not raw or not season:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    by_league = payload.get(league)
+    url = by_league.get(season) if isinstance(by_league, dict) else None
+    if not isinstance(url, str):
+        return None
+    parsed = urlsplit(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in {"oddsportal.com", "www.oddsportal.com"}
+        or len(parts) != 4
+        or parts[0] != "football"
+        or parts[-1] != "results"
+    ):
+        return None
+    return url
+
+
 def get_league_slug_for_season(sport: Sport, league: str, season: str | None) -> str | None:
     """
     Get the aliased URL slug for a league if it differs from the canonical one for the given season.
@@ -70,6 +115,13 @@ def get_league_slug_for_season(sport: Sport, league: str, season: str | None) ->
     Returns:
         The aliased URL slug to use, or None if no alias applies for this league/season.
     """
+    if sport is Sport.FOOTBALL:
+        runtime_alias = runtime_football_season_alias(
+            os.environ.get("ODDSHARVESTER_RUNTIME_FOOTBALL_SEASON_ALIASES"), league, season
+        )
+        if runtime_alias:
+            return runtime_alias
+
     if sport not in LEAGUE_SEASON_ALIASES or league not in LEAGUE_SEASON_ALIASES[sport]:
         return None
 

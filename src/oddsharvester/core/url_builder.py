@@ -1,8 +1,9 @@
+import os
 import re
 from urllib.parse import urlsplit, urlunsplit
 
 from oddsharvester.utils.constants import ODDSPORTAL_BASE_URL
-from oddsharvester.utils.league_aliases import get_league_slug_for_season
+from oddsharvester.utils.league_aliases import get_league_slug_for_season, runtime_football_historic_url
 from oddsharvester.utils.sport_league_constants import SPORTS_LEAGUES_URLS_MAPPING
 from oddsharvester.utils.sport_market_constants import Sport
 
@@ -52,6 +53,13 @@ class URLBuilder:
         """
         if isinstance(season, str) and season.lower() == "current":
             season = None
+
+        if sport.lower() == "football":
+            runtime_url = runtime_football_historic_url(
+                os.environ.get("ODDSHARVESTER_RUNTIME_FOOTBALL_HISTORIC_URLS"), league, season
+            )
+            if runtime_url:
+                return rebase_url(runtime_url, base_url)
 
         league_url = URLBuilder.get_league_url(sport, league).rstrip("/")
 

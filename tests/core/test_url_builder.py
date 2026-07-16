@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import json
 
 import pytest
 
@@ -116,6 +117,16 @@ def test_get_historic_matches_url_explicit_current_year_range_is_suffixed():
     season = f"{end_year - 1}-{end_year}"
     url = URLBuilder.get_historic_matches_url("football", "england-premier-league", season)
     assert url == f"{ODDSPORTAL_BASE_URL}/football/england/premier-league-{season}/results/"
+
+
+def test_get_historic_matches_url_prefers_exact_runtime_validated_url(monkeypatch):
+    validated_url = f"{ODDSPORTAL_BASE_URL}/football/argentina/primera-c-2025/results/"
+    monkeypatch.setenv(
+        "ODDSHARVESTER_RUNTIME_FOOTBALL_HISTORIC_URLS",
+        json.dumps({"argentina-primera-c": {"2025-2026": validated_url}}),
+    )
+
+    assert URLBuilder.get_historic_matches_url("football", "argentina-primera-c", "2025-2026") == validated_url
 
 
 @pytest.mark.parametrize(
