@@ -13,7 +13,11 @@ from pathlib import Path
 from oddsharvester.core.playwright_manager import PlaywrightManager
 from oddsharvester.utils.league_catalog import parse_football_catalog_html
 
-CATALOG_URL = "https://www.oddsportal.com/football/"
+# Unlike the generic football landing page, this page exposes the full
+# country-to-league listing in its document. Individual links use
+# ``/football/<country>/<league>/standings/`` and are canonicalized by the
+# catalog helper before validation.
+CATALOG_URL = "https://www.oddsportal.com/football/standings/"
 
 
 async def discover() -> list[dict[str, str]]:

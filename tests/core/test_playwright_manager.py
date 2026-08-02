@@ -137,6 +137,32 @@ async def test_one_context_per_proxy_when_multi(mock_playwright):
 
 
 @pytest.mark.asyncio
+async def test_initial_context_skips_preblacklisted_proxy(mock_playwright):
+    proxy_manager = ProxyManager(proxy_urls=["http://a.example.com:1", "http://b.example.com:2"])
+    proxy_manager.blacklist_proxy(proxy_manager.entries[0].key)
+    pm = PlaywrightManager()
+
+    await pm.initialize(headless=True, proxy_manager=proxy_manager)
+
+    assert list(pm.contexts) == [proxy_manager.entries[1].key]
+    assert pm._default_key == proxy_manager.entries[1].key
+    assert pm.context is pm.contexts[proxy_manager.entries[1].key]
+
+
+@pytest.mark.asyncio
+async def test_initialization_fails_when_all_proxies_are_preblacklisted(mock_playwright):
+    proxy_manager = ProxyManager(proxy_urls=["http://a.example.com:1", "http://b.example.com:2"])
+    for entry in proxy_manager.entries:
+        proxy_manager.blacklist_proxy(entry.key)
+    pm = PlaywrightManager()
+
+    with pytest.raises(AllProxiesExhaustedError, match="initialize Playwright"):
+        await pm.initialize(headless=True, proxy_manager=proxy_manager)
+
+    mock_playwright["playwright"].chromium.launch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_new_rotated_page_reports_key(mock_playwright):
     proxy_manager = ProxyManager(proxy_urls=["http://a.example.com:1", "http://b.example.com:2"])
     pm = PlaywrightManager()
@@ -155,3 +181,21 @@ async def test_new_rotated_page_raises_when_exhausted(mock_playwright):
             pm.report_page_result(key, is_proxy_failure=True)
     with pytest.raises(AllProxiesExhaustedError):
         await pm.new_rotated_page()
+
+
+@pytest.mark.asyncio
+async def test_resource_blocking_is_enabled_only_outside_har_replay(mock_playwright, monkeypatch):
+    monkeypatch.delenv("ODDSHARVESTER_HAR_REPLAY", raising=False)
+    manager = PlaywrightManager()
+    await manager.initialize(headless=True)
+    mock_playwright["context"].route.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resource_blocking_preserves_har_replay(mock_playwright, monkeypatch, tmp_path):
+    har_path = tmp_path / "snapshot.har"
+    har_path.write_text("{}")
+    monkeypatch.setenv("ODDSHARVESTER_HAR_REPLAY", str(har_path))
+    manager = PlaywrightManager()
+    await manager.initialize(headless=True)
+    mock_playwright["context"].route.assert_awaited_once()

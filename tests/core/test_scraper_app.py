@@ -7,10 +7,20 @@ from oddsharvester.core.odds_portal_market_extractor import OddsPortalMarketExtr
 from oddsharvester.core.odds_portal_scraper import OddsPortalScraper
 from oddsharvester.core.playwright_manager import PlaywrightManager
 from oddsharvester.core.retry import TRANSIENT_ERROR_KEYWORDS
-from oddsharvester.core.scrape_result import ScrapeResult, ScrapeStats
+from oddsharvester.core.scrape_result import ErrorType, FailedUrl, ScrapeResult, ScrapeStats
 from oddsharvester.core.scraper_app import _scrape_multiple_leagues, retry_scrape, run_scraper
+from oddsharvester.core.scrapling_scraper import ScraplingUnavailableError, StaticListingRequiresBrowserError
 from oddsharvester.utils.command_enum import CommandEnum
 from oddsharvester.utils.constants import OPERATION_RETRY_MAX_ATTEMPTS
+
+
+@pytest.mark.parametrize("raw_value", ["nan", "inf", "-1", "not-a-number"])
+def test_invalid_adaptive_cooldown_environment_uses_default(monkeypatch, raw_value):
+    from oddsharvester.core.scraper_app import _nonnegative_env_float
+
+    monkeypatch.setenv("OH_XHR_COOLDOWN_BASE", raw_value)
+
+    assert _nonnegative_env_float("OH_XHR_COOLDOWN_BASE", 15.0) == 15.0
 
 
 @pytest.fixture
@@ -347,7 +357,7 @@ async def test_run_scraper_auto_engine_falls_back_to_playwright_when_scrapling_r
     scraper_mock = setup_mocks["scraper_mock"]
     scraper_cls_mock.return_value = scraper_mock
     proxy_manager_mock.return_value.get_current_proxy.return_value = None
-    scrapling_mock.return_value = ScrapeResult()
+    scrapling_mock.return_value = ScrapeResult(stats=ScrapeStats(total_urls=1))
 
     result = await run_scraper(
         command=CommandEnum.UPCOMING_MATCHES,
@@ -358,9 +368,182 @@ async def test_run_scraper_auto_engine_falls_back_to_playwright_when_scrapling_r
         scraper_engine="auto",
     )
 
-    scrapling_mock.assert_called_once()
+    assert scrapling_mock.await_count == 2
     scraper_mock.scrape_upcoming.assert_called_once()
     assert result == {"result": "upcoming_data"}
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.run_scrapling_scraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_auto_skips_stealth_when_static_listing_requires_browser(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    scrapling_mock,
+    setup_mocks,
+):
+    scraper_mock = setup_mocks["scraper_mock"]
+    browser_result = ScrapeResult(success=[{"url": "https://www.oddsportal.com/football/example-match/"}])
+    scraper_mock.scrape_upcoming.return_value = browser_result
+    scraper_cls_mock.return_value = scraper_mock
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+    scrapling_mock.side_effect = StaticListingRequiresBrowserError("Unrecognized empty listing response")
+
+    result = await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        sport="football",
+        leagues=["example-league"],
+        markets=["1x2"],
+        scraper_engine="auto",
+    )
+
+    scrapling_mock.assert_awaited_once()
+    scraper_mock.scrape_upcoming.assert_awaited_once()
+    assert result is browser_result
+    assert result.metadata["engine_attempts"] == [
+        {
+            "engine": "scrapling-http",
+            "outcome": "skipped",
+            "detail": "static_listing_requires_browser",
+        },
+        {"engine": "playwright", "outcome": "completed"},
+    ]
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.run_scrapling_scraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_auto_hands_scrapling_discovery_links_to_playwright_without_stealth_discovery(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    scrapling_mock,
+    setup_mocks,
+):
+    scraper_mock = setup_mocks["scraper_mock"]
+    scraper_cls_mock.return_value = scraper_mock
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+    discovered = ["https://www.oddsportal.com/football/example-match/"]
+    scrapling_mock.return_value = ScrapeResult(
+        failed=[],
+        stats=ScrapeStats(total_urls=1, failed=1),
+        metadata={"_discovered_match_links": discovered},
+    )
+
+    result = await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        sport="football",
+        leagues=["example-league"],
+        markets=["1x2"],
+        scraper_engine="auto",
+    )
+
+    scrapling_mock.assert_awaited_once()
+    scraper_mock.scrape_matches.assert_awaited_once()
+    assert scraper_mock.scrape_matches.call_args.kwargs["match_links"] == discovered
+    assert result == {"result": "match_data"}
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.run_scrapling_scraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_auto_uses_scrapling_http_when_match_links_are_explicit(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    scrapling_mock,
+    setup_mocks,
+):
+    scraper_mock = setup_mocks["scraper_mock"]
+    scraper_cls_mock.return_value = scraper_mock
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+    links = ["https://www.oddsportal.com/football/example-match/"]
+    http_result = ScrapeResult(
+        success=[{"home_team": "A", "away_team": "B"}],
+        stats=ScrapeStats(total_urls=1, successful=1),
+    )
+    scrapling_mock.return_value = http_result
+
+    result = await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        match_links=links,
+        sport="football",
+        markets=["1x2"],
+        scraper_engine="auto",
+    )
+
+    scrapling_mock.assert_awaited_once()
+    assert scrapling_mock.call_args.kwargs["engine"] == "scrapling-http"
+    assert scrapling_mock.call_args.kwargs["match_links"] == links
+    scraper_mock.scrape_matches.assert_not_awaited()
+    assert result is http_result
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.run_scrapling_scraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalMarketExtractor")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+@patch("oddsharvester.core.scraper_app.SportMarketRegistrar")
+async def test_auto_retries_only_failed_fast_path_urls_and_preserves_success(
+    sport_market_registrar_mock,
+    proxy_manager_mock,
+    playwright_manager_mock,
+    market_extractor_mock,
+    scraper_cls_mock,
+    scrapling_mock,
+    setup_mocks,
+):
+    scraper_mock = setup_mocks["scraper_mock"]
+    browser_result = ScrapeResult(
+        success=[{"match_link": "https://www.oddsportal.com/football/country/league/failed-Abc123"}],
+        stats=ScrapeStats(total_urls=1, successful=1),
+    )
+    scraper_mock.scrape_matches.return_value = browser_result
+    scraper_cls_mock.return_value = scraper_mock
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+    good_url = "https://www.oddsportal.com/football/country/league/good-Abc123"
+    failed_url = "https://www.oddsportal.com/football/country/league/failed-Abc123"
+    partial = ScrapeResult(
+        success=[{"match_link": good_url, "home_team": "A"}],
+        failed=[FailedUrl(url=failed_url, error_type=ErrorType.RATE_LIMITED, error_message="blocked")],
+        stats=ScrapeStats(total_urls=2, successful=1, failed=1),
+    )
+    unavailable = ScraplingUnavailableError("stealth unavailable")
+    scrapling_mock.side_effect = [partial, unavailable]
+
+    result = await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        match_links=[good_url, failed_url],
+        sport="football",
+        markets=["1x2"],
+        scraper_engine="auto",
+    )
+
+    assert scraper_mock.scrape_matches.call_args.kwargs["match_links"] == [failed_url]
+    assert [row["match_link"] for row in result.success] == [good_url, failed_url]
+    assert result.stats.successful == 2
+    assert result.stats.failed == 0
 
 
 @pytest.mark.asyncio
@@ -499,9 +682,7 @@ async def test_run_scraper_error_handling(sport_market_registrar_mock, proxy_man
     proxy_manager_mock.return_value = proxy_manager_instance
 
     with pytest.raises(Exception, match="Playwright error"):
-        await run_scraper(
-            command=CommandEnum.HISTORIC, sport="football", leagues=["premier-league"], season="2023"
-        )
+        await run_scraper(command=CommandEnum.HISTORIC, sport="football", leagues=["premier-league"], season="2023")
 
     scraper_mock.stop_playwright.assert_called_once()
 
@@ -702,3 +883,180 @@ def test_run_scraper_validation(command, params, error_message):
         asyncio.run(validate_only())
 
     assert error_message in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.run_scrapling_scraper")
+@patch("oddsharvester.core.scraper_app.OddsPortalScraper")
+@patch("oddsharvester.core.scraper_app.PlaywrightManager")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+async def test_auto_stops_at_truthful_scrapling_no_fixtures(
+    proxy_manager_mock, playwright_manager_mock, scraper_cls_mock, scrapling_mock
+):
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+    no_fixtures = ScrapeResult(
+        stats=ScrapeStats(total_urls=0),
+        metadata={"discovery_outcome": "no_fixtures"},
+    )
+    scrapling_mock.return_value = no_fixtures
+
+    result = await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES, sport="football", date="20991231", markets=["1x2"], scraper_engine="auto"
+    )
+
+    assert result is no_fixtures
+    scrapling_mock.assert_awaited_once()
+    scraper_cls_mock.assert_not_called()
+    playwright_manager_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.run_scrapling_scraper")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+async def test_auto_does_not_mask_unexpected_scrapling_programming_error(
+    proxy_manager_mock, scrapling_mock
+):
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+    scrapling_mock.side_effect = AttributeError("internal bug")
+
+    with pytest.raises(AttributeError, match="internal bug"):
+        await run_scraper(
+            command=CommandEnum.UPCOMING_MATCHES,
+            sport="football",
+            date="20991231",
+            markets=["1x2"],
+            scraper_engine="auto",
+        )
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.scraper_app.asyncio.sleep", new_callable=AsyncMock)
+@patch("oddsharvester.core.scraper_app.run_scrapling_scraper")
+@patch("oddsharvester.core.scraper_app.ProxyManager")
+async def test_auto_waits_for_direct_egress_cooldown_before_stealth(
+    proxy_manager_mock, scrapling_mock, sleep_mock
+):
+    proxy_manager_mock.return_value.get_current_proxy.return_value = None
+    proxy_manager_mock.return_value.entries = [MagicMock(config=None)]
+    proxy_manager_mock.return_value.is_multi_proxy.return_value = False
+    failed_url = "https://www.oddsportal.com/football/h2h/a-b/c-d/#event"
+    http_result = ScrapeResult(
+        failed=[
+            FailedUrl(
+                url=failed_url,
+                error_type=ErrorType.RATE_LIMITED,
+                error_message="soft block",
+            )
+        ],
+        stats=ScrapeStats(total_urls=1, failed=1),
+        metadata={"egress": {"cooldown_remaining_seconds": 2.5}},
+    )
+    stealth_result = ScrapeResult(
+        success=[{"match_link": failed_url}],
+        stats=ScrapeStats(total_urls=1, successful=1),
+    )
+    scrapling_mock.side_effect = [http_result, stealth_result]
+
+    result = await run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        match_links=[failed_url],
+        sport="football",
+        markets=["1x2"],
+        scraper_engine="auto",
+    )
+
+    sleep_mock.assert_awaited_once_with(2.5)
+    assert result is stealth_result
+    assert result.metadata["engine_attempts"][1] == {
+        "engine": "adaptive_cooldown",
+        "outcome": "waiting",
+        "detail": "scrapling-http_fallback:2.500s",
+    }
+
+
+@pytest.mark.asyncio
+async def test_auto_waits_before_camoufox_reuses_direct_ip(monkeypatch):
+    import oddsharvester.core.scraper_app as scraper_app
+
+    monkeypatch.setenv("OH_XHR_COOLDOWN_BASE", "3")
+    monkeypatch.setenv("OH_XHR_COOLDOWN_MAX", "6")
+    proxy_manager = MagicMock()
+    proxy_manager.get_current_proxy.return_value = None
+    proxy_manager.entries = [MagicMock(config=None)]
+    proxy_manager.is_multi_proxy.return_value = False
+    monkeypatch.setattr(scraper_app, "ProxyManager", MagicMock(return_value=proxy_manager))
+    match_url = "https://www.oddsportal.com/football/h2h/a-b/c-d/#event"
+    http_result = ScrapeResult(
+        failed=[
+            FailedUrl(
+                url=match_url,
+                error_type=ErrorType.RATE_LIMITED,
+                error_message="XHR soft block",
+            )
+        ],
+        stats=ScrapeStats(total_urls=1, failed=1),
+        metadata={
+            "egress": {
+                "mode": "direct_or_single",
+                "cooldown_remaining_seconds": 0,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        scraper_app,
+        "run_scrapling_scraper",
+        AsyncMock(
+            side_effect=[
+                http_result,
+                ScraplingUnavailableError("stealth unavailable"),
+            ]
+        ),
+    )
+    primary_scraper = MagicMock()
+    primary_scraper.start_playwright = AsyncMock()
+    primary_scraper.stop_playwright = AsyncMock()
+    fallback_scraper = MagicMock()
+    fallback_scraper.start_playwright = AsyncMock()
+    fallback_scraper.stop_playwright = AsyncMock()
+    scraper_factory = MagicMock(side_effect=[primary_scraper, fallback_scraper])
+    monkeypatch.setattr(scraper_app, "OddsPortalScraper", scraper_factory)
+    monkeypatch.setattr(scraper_app, "PlaywrightManager", MagicMock())
+    monkeypatch.setattr(scraper_app, "CamoufoxManager", MagicMock())
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr(scraper_app.asyncio, "sleep", sleep_mock)
+
+    browser_result = ScrapeResult(
+        failed=[
+            FailedUrl(
+                url=match_url,
+                error_type=ErrorType.UNKNOWN,
+                error_message="No data returned",
+            )
+        ],
+        stats=ScrapeStats(total_urls=1, failed=1),
+    )
+    camoufox_result = ScrapeResult(
+        success=[{"match_link": match_url}],
+        stats=ScrapeStats(total_urls=1, successful=1),
+    )
+    monkeypatch.setattr(
+        scraper_app,
+        "retry_scrape",
+        AsyncMock(side_effect=[browser_result, camoufox_result]),
+    )
+
+    result = await scraper_app.run_scraper(
+        command=CommandEnum.UPCOMING_MATCHES,
+        match_links=[match_url],
+        sport="football",
+        markets=["1x2"],
+        scraper_engine="auto",
+    )
+
+    sleep_mock.assert_awaited_once_with(3.0)
+    assert result.success == [{"match_link": match_url}]
+    assert not result.failed
+    assert any(
+        attempt.get("detail") == "camoufox_fallback:3.000s"
+        for attempt in result.metadata["engine_attempts"]
+    )

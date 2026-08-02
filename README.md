@@ -251,6 +251,9 @@ All CLI options can be set via environment variables — useful for Docker or CI
 | `OH_HEADLESS`      | `--headless`      | Run in headless mode         |
 | `OH_CONCURRENCY`   | `--concurrency`   | Number of concurrent tasks   |
 | `OH_REQUEST_DELAY` | `--request-delay` | Delay between requests (sec) |
+| `OH_XHR_GEO` | HTTP XHR fast path | Two-letter market/provider geography (default: `RO`); use proxies from the same target geography |
+| `OH_XHR_COOLDOWN_BASE` | HTTP XHR fast path | Initial same-egress cooldown after a block/rate-limit (default: `15` seconds) |
+| `OH_XHR_COOLDOWN_MAX` | HTTP XHR fast path | Maximum exponential same-egress cooldown (default: `300` seconds) |
 | `OH_PROXY_URL`     | `--proxy-url`     | Proxy server URL(s) — space-separated for multiple proxies |
 | `OH_PROXY_USER`    | `--proxy-user`    | Proxy username               |
 | `OH_PROXY_PASS`    | `--proxy-pass`    | Proxy password               |
@@ -258,6 +261,13 @@ All CLI options can be set via environment variables — useful for Docker or CI
 | `OH_LOCALE`        | `--locale`        | Browser locale               |
 | `OH_TIMEZONE`      | `--timezone`      | Browser timezone ID          |
 | `OH_BASE_URL`      | `--base-url`      | Regional OddsPortal mirror base URL |
+
+Without proxies, keep `scraper-engine=auto`: XHR remains the fast path, while
+the direct IP is paced with jitter and exponential cooldown before Scrapling
+stealth, Playwright, or Camoufox reuse the same egress. Successful requests
+reset the backoff; after a cooldown an open direct-egress circuit permits one
+half-open probe. Setting both cooldown variables to `0` disables only the
+adaptive wait and is not recommended for live scraping.
 
 </details>
 

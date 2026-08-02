@@ -22,9 +22,11 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
-from urllib.parse import urlparse
+import tempfile
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 # Project paths
 SCRIPT_DIR = Path(__file__).parent
@@ -176,33 +178,44 @@ def capture_fixture(
     print()
 
     env = os.environ.copy()
+    raw_har_dir: Path | None = None
+    raw_har_path: Path | None = None
     if capture_har:
-        env["ODDSHARVESTER_HAR_RECORD"] = str(har_path)
+        raw_har_dir = Path(tempfile.mkdtemp(prefix="oddsharvester-har-"))
+        raw_har_path = raw_har_dir / "capture.har"
+        env["ODDSHARVESTER_HAR_RECORD"] = str(raw_har_path)
         print(f"Recording HAR to: {har_path}")
 
-    result = subprocess.run(  # noqa: S603
-        cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=timeout, env=env
-    )
+    try:
+        result = subprocess.run(  # noqa: S603
+            cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=timeout, env=env
+        )
 
-    if result.returncode != 0:
-        print(f"Scraper failed with exit code {result.returncode}")
-        print(f"STDOUT:\n{result.stdout}")
-        print(f"STDERR:\n{result.stderr}")
-        raise RuntimeError("Scraper failed")
+        if result.returncode != 0:
+            print(f"Scraper failed with exit code {result.returncode}")
+            print(f"STDOUT:\n{result.stdout}")
+            print(f"STDERR:\n{result.stderr}")
+            raise RuntimeError("Scraper failed")
 
-    print("Scraper succeeded!")
-    if result.stdout:
-        print(f"Output: {result.stdout.strip()}")
+        print("Scraper succeeded!")
+        if result.stdout:
+            print(f"Output: {result.stdout.strip()}")
 
-    # Verify output file exists
-    if not output_path.exists():
-        raise RuntimeError(f"Output file not created: {output_path}")
+        if not output_path.exists():
+            raise RuntimeError(f"Output file not created: {output_path}")
 
-    if capture_har and not har_path.exists():
-        raise RuntimeError(f"HAR file not created: {har_path}")
-
-    if capture_har:
-        _alias_fragmented_redirect_targets(har_path)
+        if capture_har:
+            if raw_har_path is None or not raw_har_path.exists():
+                raise RuntimeError("HAR file not created")
+            _alias_fragmented_redirect_targets(raw_har_path)
+            sanitize_har(raw_har_path)
+            assert_sanitized_har(raw_har_path)
+            raw_har_path.replace(har_path)
+    finally:
+        if raw_har_path is not None:
+            raw_har_path.unlink(missing_ok=True)
+        if raw_har_dir is not None:
+            raw_har_dir.rmdir()
 
     # Load scraped data to extract metadata
     with open(output_path) as f:
@@ -321,6 +334,115 @@ Examples:
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
+
+
+def sanitize_har(har_path: Path) -> bool:
+    """Remove credential-bearing headers and token-like HAR fields before persistence."""
+    har = json.loads(har_path.read_text())
+    changed = False
+    sensitive_names = {
+        "authorization",
+        "cookie",
+        "cookies",
+        "password",
+        "proxy-authorization",
+        "set-cookie",
+    }
+    sensitive_markers = ("api-key", "apikey", "auth", "csrf", "jwt", "password", "secret", "session", "token")
+
+    def is_sensitive_name(name: object) -> bool:
+        normalized = str(name or "").strip().lower()
+        return normalized in sensitive_names or any(marker in normalized for marker in sensitive_markers)
+
+    def scrub_text(text: str, mime_type: str) -> str:
+        nonlocal changed
+        replacement = text
+        if "json" in mime_type:
+            try:
+                payload = json.loads(text)
+            except (TypeError, ValueError):
+                payload = None
+            if payload is not None:
+                before = json.dumps(payload, sort_keys=True)
+                scrub(payload)
+                after = json.dumps(payload, sort_keys=True)
+                if before != after:
+                    replacement = json.dumps(payload)
+        elif "x-www-form-urlencoded" in mime_type:
+            pairs = parse_qsl(text, keep_blank_values=True)
+            retained = [(key, value) for key, value in pairs if not is_sensitive_name(key)]
+            if retained != pairs:
+                replacement = urlencode(retained)
+                changed = True
+
+        redacted = re.sub(
+            r'(?i)(name=["\'](?:csrf[-_]?token|auth[-_]?token)["\'][^>]*content=["\'])[^"\']*(["\'])',
+            r"\1[REDACTED]\2",
+            replacement,
+        )
+        if redacted != replacement:
+            changed = True
+        return redacted
+
+    def scrub(value):
+        nonlocal changed
+        if isinstance(value, dict):
+            for key in list(value):
+                if is_sensitive_name(key):
+                    value.pop(key)
+                    changed = True
+                else:
+                    scrub(value[key])
+            url = value.get("url")
+            if isinstance(url, str):
+                parsed = urlsplit(url)
+                query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+                retained = [(key, item) for key, item in query_pairs if not is_sensitive_name(key)]
+                if retained != query_pairs:
+                    value["url"] = urlunsplit(
+                        (parsed.scheme, parsed.netloc, parsed.path, urlencode(retained), parsed.fragment)
+                    )
+                    changed = True
+            text = value.get("text")
+            if isinstance(text, str):
+                mime_type = str(value.get("mimeType") or value.get("mime_type") or "")
+                value["text"] = scrub_text(text, mime_type)
+        elif isinstance(value, list):
+            retained = []
+            for item in value:
+                if isinstance(item, dict) and is_sensitive_name(item.get("name")):
+                    changed = True
+                    continue
+                scrub(item)
+                retained.append(item)
+            value[:] = retained
+
+    scrub(har)
+    if changed:
+        har_path.write_text(json.dumps(har, separators=(",", ":")) + "\n")
+    return changed
+
+
+def assert_sanitized_har(har_path: Path) -> None:
+    """Reject a HAR if credential-bearing fields remain after sanitization."""
+    har = json.loads(har_path.read_text())
+    sensitive_markers = ("api-key", "apikey", "auth", "cookie", "csrf", "jwt", "password", "secret", "session", "token")
+
+    def is_sensitive_name(value: object) -> bool:
+        normalized = str(value or "").strip().lower().replace("_", "-")
+        return any(marker in normalized for marker in sensitive_markers)
+
+    for entry in har.get("log", {}).get("entries", []):
+        for message in (entry.get("request", {}), entry.get("response", {})):
+            if message.get("cookies"):
+                raise ValueError("HAR residue scan found cookies")
+            for header in message.get("headers", []):
+                if is_sensitive_name(header.get("name")):
+                    raise ValueError("HAR residue scan found a sensitive header")
+        request_url = str(entry.get("request", {}).get("url") or "")
+        for key, _value in parse_qsl(urlsplit(request_url).query, keep_blank_values=True):
+            if is_sensitive_name(key):
+                raise ValueError("HAR residue scan found a sensitive query parameter")
 
 
 if __name__ == "__main__":

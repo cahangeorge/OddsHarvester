@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 import json
 import logging
+import os
 import random
 import re
 from typing import Any
@@ -643,8 +644,7 @@ class BaseScraper:
         await page.goto(match_link, timeout=NAVIGATION_TIMEOUT_MS, wait_until="domcontentloaded")
 
         try:
-            # Wait a bit for dynamic content to load
-            await page.wait_for_timeout(DYNAMIC_CONTENT_WAIT_MS)
+            await self._wait_for_match_content(page)
 
             # Apply bookmaker filter before extracting odds
             await self.selection_manager.ensure_selected(
@@ -690,6 +690,27 @@ class BaseScraper:
         except Exception as e:
             self.logger.error(f"Error scraping match data from {match_link}: {e}")
             return None
+
+    async def _wait_for_match_content(self, page: Page) -> None:
+        """Wait for trusted match-detail DOM, preserving the legacy bounded delay."""
+        if os.environ.get("ODDSHARVESTER_PIPELINE_V2") != "1":
+            await page.wait_for_timeout(DYNAMIC_CONTENT_WAIT_MS)
+            return
+        try:
+            await page.wait_for_function(
+                """([hostTestId, guestTestId]) => Boolean(
+                    document.querySelector(`div[data-testid="${hostTestId}"] p`) &&
+                    document.querySelector(`div[data-testid="${guestTestId}"] p`)
+                )""",
+                arg=[
+                    OddsPortalSelectors.MATCH_DETAILS_GAME_HOST_TESTID,
+                    OddsPortalSelectors.MATCH_DETAILS_GAME_GUEST_TESTID,
+                ],
+                timeout=DYNAMIC_CONTENT_WAIT_MS,
+            )
+            self.logger.info("Match content ready via trusted team selectors")
+        except TimeoutError:
+            self.logger.info("Match readiness condition timed out; continuing after the bounded wait")
 
     def _resolved_browser_timezone(self) -> ZoneInfo:
         """

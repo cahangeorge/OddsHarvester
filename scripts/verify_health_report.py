@@ -4,12 +4,12 @@ import argparse
 import json
 from pathlib import Path
 
-EXPECTED_SCHEMA_VERSION = "1.0"
+SUPPORTED_SCHEMA_VERSIONS = {"1.0", "1.1"}
 
 
 def verify_report(path: Path) -> None:
     report = json.loads(path.read_text(encoding="utf-8"))
-    if report.get("schema_version") != EXPECTED_SCHEMA_VERSION:
+    if report.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
         raise ValueError(f"{path}: unsupported report schema {report.get('schema_version')!r}")
     if report.get("status") != "success":
         raise ValueError(f"{path}: canary status is {report.get('status')!r}")

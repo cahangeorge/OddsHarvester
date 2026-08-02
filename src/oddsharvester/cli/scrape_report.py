@@ -8,7 +8,7 @@ from typing import Any
 from oddsharvester.core.scrape_result import ScrapeResult
 from oddsharvester.utils.scraper_engine import ScraperEngine
 
-REPORT_SCHEMA_VERSION = "1.0"
+REPORT_SCHEMA_VERSION = "1.1"
 
 
 def write_scrape_report(
@@ -34,9 +34,17 @@ def write_scrape_report(
         "schema_version": REPORT_SCHEMA_VERSION,
         "command": command,
         "status": _status(result, exception_type),
+        "outcome": _outcome(result, exception_type),
         "engines": {
             "requested": requested_engine,
             "used": _used_engines(result, requested_engine),
+            "attempts": (result.metadata.get("engine_attempts", []) if result else []),
+            "cache": (result.metadata.get("cache", {}) if result else {}),
+            "repair": (
+                result.metadata.get("repair", {"status": "repair_skipped", "reason": "not_requested"})
+                if result
+                else {"status": "repair_skipped", "reason": "not_requested"}
+            ),
         },
         "source": source,
         "locale": locale,
@@ -57,11 +65,23 @@ def write_scrape_report(
 
 
 def _status(result: ScrapeResult | None, exception_type: str | None) -> str:
-    if exception_type or not result or not result.success:
+    if exception_type or not result:
+        return "failed"
+    if result.metadata.get("discovery_outcome") == "no_fixtures":
+        return "success"
+    if not result.success:
         return "failed"
     if result.failed or result.partial:
         return "partial"
     return "success"
+
+
+def _outcome(result: ScrapeResult | None, exception_type: str | None) -> str:
+    if exception_type:
+        return "failed"
+    if result and result.metadata.get("discovery_outcome") == "no_fixtures":
+        return "no_fixtures"
+    return _status(result, exception_type)
 
 
 def _used_engines(result: ScrapeResult | None, requested_engine: str) -> list[str]:

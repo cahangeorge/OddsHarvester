@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 
 CANONICAL_ODDSPORTAL_URL = "https://www.oddsportal.com"
 _FOOTBALL_PATH_SEGMENTS = 3
+_STANDINGS_PATH_SEGMENTS = 4
 
 
 @dataclass(frozen=True, order=True)
@@ -35,9 +36,10 @@ class FootballLeagueCandidate:
 def normalize_football_league_url(url: str) -> FootballLeagueCandidate | None:
     """Return a canonical football candidate for an OddsPortal league URL.
 
-    Only direct ``/football/<country>/<league>/`` paths are accepted.  Result,
-    match, and non-OddsPortal links are deliberately ignored rather than
-    guessed from their text or query parameters.
+    Direct ``/football/<country>/<league>/`` paths and the canonical standings
+    listing variant ``/football/<country>/<league>/standings/`` are accepted.
+    Result, match, and non-OddsPortal links are deliberately ignored rather
+    than guessed from their text or query parameters.
     """
     parsed = urlparse(urljoin(f"{CANONICAL_ODDSPORTAL_URL}/", url))
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -47,10 +49,15 @@ def normalize_football_league_url(url: str) -> FootballLeagueCandidate | None:
         return None
 
     segments = [segment.lower() for segment in parsed.path.split("/") if segment]
-    if len(segments) != _FOOTBALL_PATH_SEGMENTS or segments[0] != "football":
+    is_direct_league = len(segments) == _FOOTBALL_PATH_SEGMENTS
+    is_standings_league = (
+        len(segments) == _STANDINGS_PATH_SEGMENTS
+        and segments[-1] == "standings"
+    )
+    if not (is_direct_league or is_standings_league) or segments[0] != "football":
         return None
 
-    _, country_slug, league_slug = segments
+    _, country_slug, league_slug = segments[:_FOOTBALL_PATH_SEGMENTS]
     if not country_slug or not league_slug:
         return None
 

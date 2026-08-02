@@ -12,6 +12,8 @@ from oddsharvester.utils.utils import is_running_in_docker
 HAR_REPLAY_ENV_VAR = "ODDSHARVESTER_HAR_REPLAY"
 HAR_RECORD_ENV_VAR = "ODDSHARVESTER_HAR_RECORD"
 HAR_REPLAY_URL_PATTERN = "**oddsportal.com/**"
+BLOCKED_RESOURCE_TYPES = {"image", "font", "media"}
+TRACKING_URL_MARKERS = ("google-analytics", "googletagmanager", "/analytics", "/tracking", "doubleclick")
 
 # Anti-detection script to hide automation signatures
 STEALTH_SCRIPT = """
@@ -66,6 +68,15 @@ class PlaywrightManager:
             self.logger.info("Starting Playwright...")
             self.timezone_id = timezone_id
             self._proxy_manager = proxy_manager
+            healthy_entries = (
+                [entry for entry in proxy_manager.entries if not entry.blacklisted]
+                if proxy_manager
+                else []
+            )
+            if proxy_manager and not healthy_entries:
+                raise AllProxiesExhaustedError(
+                    "All proxies are blacklisted; cannot initialize Playwright."
+                )
             self.playwright = await async_playwright().start()
 
             browser_args = PLAYWRIGHT_BROWSER_ARGS_DOCKER if is_running_in_docker() else PLAYWRIGHT_BROWSER_ARGS
@@ -80,9 +91,9 @@ class PlaywrightManager:
             # Per-context proxy is used ONLY in multi-proxy mode; otherwise the
             # single context inherits the launch proxy (unchanged behavior).
             if proxy_manager and proxy_manager.is_multi_proxy():
-                context_specs = [(e.key, e.config) for e in proxy_manager.entries]
+                context_specs = [(entry.key, entry.config) for entry in healthy_entries]
             elif proxy_manager:
-                context_specs = [(proxy_manager.entries[0].key, None)]
+                context_specs = [(healthy_entries[0].key, None)]
             else:
                 context_specs = [("direct", None)]
 
@@ -146,12 +157,30 @@ class PlaywrightManager:
             har_replay_path = os.environ.get(HAR_REPLAY_ENV_VAR)
             if har_replay_path:
                 self.logger.info(f"HAR replay mode active: {har_replay_path}")
+                # Register catch-all first: HAR's later, specific route wins for
+                # recorded requests; all unmatched third-party traffic is aborted.
+                await context.route("**/*", self._abort_unmatched_replay_request)
                 await context.route_from_har(
                     Path(har_replay_path),
                     url=HAR_REPLAY_URL_PATTERN,
                     not_found="abort",
                 )
+            else:
+                await context.route("**/*", self._block_nonessential_request)
+        else:
+            await context.route("**/*", self._block_nonessential_request)
         return context
+
+    async def _abort_unmatched_replay_request(self, route):
+        await route.abort()
+
+    async def _block_nonessential_request(self, route):
+        request = route.request
+        url = request.url.lower()
+        if request.resource_type in BLOCKED_RESOURCE_TYPES or any(marker in url for marker in TRACKING_URL_MARKERS):
+            await route.abort()
+            return
+        await route.continue_()
 
     def non_default_context_keys(self) -> list[str]:
         """Keys of proxy contexts other than the default one (empty for single/no-proxy)."""

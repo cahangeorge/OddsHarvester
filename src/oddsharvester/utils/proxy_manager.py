@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import logging
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 # A proxy is dropped from rotation after this many CONSECUTIVE proxy-attributable
 # failures (navigation / rate-limit). The counter resets on any non-proxy outcome.
@@ -98,8 +98,8 @@ class ProxyManager:
         config: dict[str, str] = {"server": server}
 
         if parsed.username and parsed.password:
-            config["username"] = parsed.username
-            config["password"] = parsed.password
+            config["username"] = unquote(parsed.username)
+            config["password"] = unquote(parsed.password)
             self.logger.info(f"Configured proxy with authentication: {server}")
         elif proxy_user and proxy_pass:
             config["username"] = proxy_user
@@ -122,13 +122,14 @@ class ProxyManager:
             return dict(_PER_CONTEXT_SENTINEL)
         return self.entries[0].config
 
-    def next_proxy(self) -> ProxyEntry | None:
+    def next_proxy(self, exclude_keys: set[str] | None = None) -> ProxyEntry | None:
         """Return the next non-blacklisted proxy (round-robin), or None if all are blacklisted."""
+        excluded = exclude_keys or set()
         n = len(self.entries)
         for i in range(n):
             idx = (self._cursor + i) % n
             entry = self.entries[idx]
-            if not entry.blacklisted:
+            if not entry.blacklisted and entry.key not in excluded:
                 self._cursor = (idx + 1) % n
                 return entry
         if not self._exhausted_logged:
@@ -142,6 +143,10 @@ class ProxyManager:
         if entry is not None and not entry.blacklisted:
             entry.blacklisted = True
             self.logger.warning(f"Proxy removed from rotation (context warm-up failed): {entry.key}")
+
+    def is_blacklisted(self, key: str) -> bool:
+        entry = next((entry for entry in self.entries if entry.key == key), None)
+        return bool(entry and entry.blacklisted)
 
     def report_result(self, key: str, is_proxy_failure: bool) -> None:
         """Record the outcome of a request that used the proxy identified by `key`.

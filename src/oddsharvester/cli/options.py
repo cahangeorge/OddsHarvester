@@ -135,6 +135,14 @@ def common_options(func):
         help="Number of concurrent scraping tasks.",
     )
     @click.option(
+        "--http-concurrency",
+        type=int,
+        default=12,
+        callback=validate_concurrency,
+        envvar="OH_HTTP_CONCURRENCY",
+        help="Concurrent Scrapling HTTP requests (default: 12; browser engines remain capped).",
+    )
+    @click.option(
         "--match-link",
         "match_links",
         multiple=True,
@@ -237,7 +245,7 @@ def common_options(func):
         type=click.Choice([engine.value for engine in ScraperEngine], case_sensitive=False),
         default=ScraperEngine.PLAYWRIGHT.value,
         envvar="OH_ENGINE",
-        help="Scraper engine: playwright, auto, scrapling-http, or scrapling-stealth.",
+        help="Scraper engine: auto, playwright, camoufox, scrapling-http, or scrapling-stealth.",
     )
     @functools.wraps(func)
     def wrapper(*args, **kwargs):

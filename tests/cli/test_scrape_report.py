@@ -42,6 +42,7 @@ def test_write_scrape_report_has_stable_versioned_shape(tmp_path):
         "schema_version",
         "command",
         "status",
+        "outcome",
         "engines",
         "source",
         "locale",
@@ -51,9 +52,16 @@ def test_write_scrape_report_has_stable_versioned_shape(tmp_path):
         "warnings",
         "timing",
     ]
-    assert report["schema_version"] == "1.0"
+    assert report["schema_version"] == "1.1"
     assert report["status"] == "partial"
-    assert report["engines"] == {"requested": "auto", "used": ["scrapling-http"]}
+    assert report["outcome"] == "partial"
+    assert report["engines"] == {
+        "requested": "auto",
+        "used": ["scrapling-http"],
+        "attempts": [],
+        "cache": {},
+        "repair": {"status": "repair_skipped", "reason": "not_requested"},
+    }
     assert report["stats"] == {
         "total_urls": 3,
         "successful": 1,
@@ -64,6 +72,52 @@ def test_write_scrape_report_has_stable_versioned_shape(tmp_path):
     assert report["failures"][0]["error_type"] == "navigation"
     assert report["warnings"] == ["Market btts missing"]
     assert report["timing"]["duration_seconds"] == 1.234
+
+
+def test_v11_no_fixtures_requires_explicit_discovery_attestation(tmp_path):
+    started_at = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
+    output = tmp_path / "report.json"
+    result = ScrapeResult(
+        stats=ScrapeStats(total_urls=0),
+        metadata={"discovery_outcome": "no_fixtures"},
+    )
+
+    write_scrape_report(
+        str(output),
+        command="upcoming",
+        result=result,
+        requested_engine="auto",
+        source={"sport": "football"},
+        locale=None,
+        timezone=None,
+        started_at=started_at,
+        finished_at=started_at,
+    )
+
+    report = json.loads(output.read_text())
+    assert report["status"] == "success"
+    assert report["outcome"] == "no_fixtures"
+
+
+def test_v11_zero_urls_without_attestation_is_failed(tmp_path):
+    started_at = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
+    output = tmp_path / "report.json"
+
+    write_scrape_report(
+        str(output),
+        command="upcoming",
+        result=ScrapeResult(stats=ScrapeStats(total_urls=0)),
+        requested_engine="auto",
+        source={"sport": "football"},
+        locale=None,
+        timezone=None,
+        started_at=started_at,
+        finished_at=started_at,
+    )
+
+    report = json.loads(output.read_text())
+    assert report["status"] == "failed"
+    assert report["outcome"] == "failed"
 
 
 @pytest.mark.parametrize(
@@ -103,7 +157,13 @@ def test_cli_report_is_additive_and_primary_output_stays_a_list(tmp_path, comman
     report = json.loads(report_output.read_text())
     assert report["command"] == command
     assert report["source"]["sport"] == "football"
-    assert report["engines"] == {"requested": "auto", "used": ["scrapling-http"]}
+    assert report["engines"] == {
+        "requested": "auto",
+        "used": ["scrapling-http"],
+        "attempts": [],
+        "cache": {},
+        "repair": {"status": "repair_skipped", "reason": "not_requested"},
+    }
 
 
 def test_cli_writes_failed_report_when_scraper_raises(tmp_path):

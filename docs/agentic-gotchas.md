@@ -772,9 +772,10 @@ The README and docstrings previously described `--preview-only` as an
 the `preview_submarkets_only` docstrings in `base_scraper.py` /
 `odds_portal_market_extractor.py`).
 
-The odds feed (`/match-event/*.dat`) is also a dead end for this: it's an
-encrypted base64 blob decrypted client-side, so no average can be read
-from the raw response either.
+The odds feed (`/match-event/*.dat`) is decodable with the public client
+bundle contract described in §13, but its per-provider market rows still
+do not expose a separate labeled average row. Compute an average from
+those provider rows when that product behavior is required.
 
 ### Detection signal
 
@@ -792,6 +793,60 @@ scrape on match pages. This is why the average-odds half of the
 umbrella/average-odds feature was dropped after a feasibility spike; only
 the umbrella market tokens (`over_under`, `asian_handicap` expanding to all
 rendered lines) shipped. See issue #71.
+
+---
+
+## §13 — XHR payloads are encrypted, versioned, and may soft-block with HTTP 200
+
+**Severity:** High — a naive HTTP client either treats encrypted data as
+unusable or silently parses a normal HTML page returned by an XHR URL.
+
+OddsPortal's listing, event, provider, and market endpoints return a
+client-encrypted envelope. The public application bundle contains the
+PBKDF2/AES-CBC/PKCS7/gzip decoding contract, so the endpoints can be used
+without rendering a browser when that contract is still current. Keep the
+decoder revision pinned and validate the envelope, decompressed size, JSON
+shape, requested event ID, provider catalog, market type, scope, and
+handicap before emitting records.
+
+The same endpoint can return a full HTML page with **HTTP 200** for one
+egress/fingerprint while returning encrypted JSON for another. This is a
+soft block, not decoder drift. Treat HTML at an XHR endpoint as an
+egress-attributable failure: apply bounded retry/backoff, move a failing
+proxy behind the circuit breaker, and then fall back to the browser path.
+Do not repeatedly hammer the same IP or rotate identity on every request.
+When no proxy exists, Camoufox still uses the same public IP. It may recover
+from browser-fingerprint or JavaScript challenges, but it cannot bypass a
+hard IP rate limit. The safe direct-egress path therefore applies jitter plus
+an exponential cooldown before reusing that IP, then permits a single
+half-open probe. A successful response resets the backoff.
+
+### Detection signal
+
+- An XHR decode fails on a non-ASCII character and the response begins
+  with `<!DOCTYPE html>`.
+- `d` is empty or required market/provider fields disappear after an
+  application bundle deployment.
+- Direct XHR latency jumps sharply while a browser request from the same
+  host still succeeds.
+
+### Fix pattern
+
+- `core/oddsportal_xhr.py` owns the versioned decoder and schema checks.
+- `core/scrapling_scraper.py` uses persistent sessions, a sticky proxy for
+  all requests in one match/listing, per-egress pacing and circuit breaking,
+  bounded alternate-proxy failover for HTTP, provider/bounded-cache reuse,
+  and browser fallback on contract drift. Stealth uses one sticky proxy and
+  fails over to the browser rather than silently leaking to direct egress.
+- With no proxy, `OH_XHR_COOLDOWN_BASE` and `OH_XHR_COOLDOWN_MAX` bound the
+  direct-IP exponential cooldown. `scraper_app.py` honors the remaining
+  cooldown before moving from HTTP to stealth/browser and before Camoufox
+  retries an anti-bot failure on the same egress.
+- Keep `OH_XHR_GEO` aligned with the proxy pool's target geography. Provider
+  IDs are validated against the regional catalog; a mismatch fails closed.
+- Refresh the decoder only from a freshly captured public bundle and add
+  fixture tests for plain/gzip envelopes plus live canaries for listing,
+  provider mapping, and every supported market.
 
 ---
 

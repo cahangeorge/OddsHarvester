@@ -17,7 +17,7 @@ from oddsharvester.core.base_scraper import (
 from oddsharvester.core.odds_portal_market_extractor import OddsPortalMarketExtractor
 from oddsharvester.core.odds_portal_scraper import OddsPortalScraper
 from oddsharvester.core.playwright_manager import PlaywrightManager
-from oddsharvester.utils.constants import NAVIGATION_TIMEOUT_MS, ODDSPORTAL_BASE_URL
+from oddsharvester.utils.constants import DYNAMIC_CONTENT_WAIT_MS, NAVIGATION_TIMEOUT_MS, ODDSPORTAL_BASE_URL
 from oddsharvester.utils.odds_format_enum import OddsFormat
 
 
@@ -879,6 +879,33 @@ async def test_scrape_match_data(setup_base_scraper_mocks):
     assert result["match_date"] == "2023-05-01 20:00:00 UTC"
     assert "1x2" in result
     assert "over_under_2_5" in result
+
+
+@pytest.mark.asyncio
+async def test_v2_wait_for_match_content_uses_trusted_dom_condition(setup_base_scraper_mocks, monkeypatch):
+    scraper = setup_base_scraper_mocks["scraper"]
+    page_mock = setup_base_scraper_mocks["page_mock"]
+    monkeypatch.setenv("ODDSHARVESTER_PIPELINE_V2", "1")
+
+    await scraper._wait_for_match_content(page_mock)
+
+    page_mock.wait_for_function.assert_awaited_once()
+    assert page_mock.wait_for_function.call_args.kwargs["arg"] == ["game-host", "game-guest"]
+    assert page_mock.wait_for_function.call_args.kwargs["timeout"] == DYNAMIC_CONTENT_WAIT_MS
+    page_mock.wait_for_timeout.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v2_wait_for_match_content_preserves_bounded_timeout(setup_base_scraper_mocks, monkeypatch):
+    scraper = setup_base_scraper_mocks["scraper"]
+    page_mock = setup_base_scraper_mocks["page_mock"]
+    page_mock.wait_for_function = AsyncMock(side_effect=TimeoutError("not ready"))
+    monkeypatch.setenv("ODDSHARVESTER_PIPELINE_V2", "1")
+
+    await scraper._wait_for_match_content(page_mock)
+
+    page_mock.wait_for_function.assert_awaited_once()
+    page_mock.wait_for_timeout.assert_not_awaited()
 
 
 @pytest.mark.asyncio

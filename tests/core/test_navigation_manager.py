@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock, MagicMock
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 import pytest
 
 from oddsharvester.core.browser.market_navigation import MarketTabNavigator
@@ -77,6 +78,39 @@ class TestNavigationManager:
         # Assert
         assert result is True
         page_mock.wait_for_timeout.assert_called_with(MARKET_SWITCH_WAIT_TIME_MS)
+
+    @pytest.mark.asyncio
+    async def test_v2_market_switch_returns_immediately_when_url_code_is_active(
+        self, navigation_manager, page_mock
+    ):
+        navigation_manager.fast_ready_waits = True
+
+        result = await navigation_manager.wait_for_market_switch(
+            page_mock,
+            "1X2",
+            already_active_before_navigation=True,
+        )
+
+        assert result is True
+        page_mock.wait_for_timeout.assert_not_awaited()
+        page_mock.query_selector.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_v2_market_switch_does_not_trust_url_change_without_preexisting_active_market(
+        self, navigation_manager, page_mock
+    ):
+        navigation_manager.fast_ready_waits = True
+        page_mock.url = "https://www.oddsportal.com/example/#match-id:1X2;2"
+
+        result = await navigation_manager.wait_for_market_switch(
+            page_mock,
+            "1X2",
+            max_attempts=1,
+            already_active_before_navigation=False,
+        )
+
+        assert result is True
+        page_mock.wait_for_timeout.assert_awaited_once_with(MARKET_SWITCH_WAIT_TIME_MS)
 
     @pytest.mark.asyncio
     async def test_wait_for_market_switch_wrong_market(self, navigation_manager, page_mock):
@@ -231,6 +265,29 @@ class TestNavigationManager:
 
         # Assert
         page_mock.wait_for_timeout.assert_called_once_with(SCROLL_PAUSE_TIME_MS)
+
+    @pytest.mark.asyncio
+    async def test_v2_wait_for_page_load_uses_bookmaker_readiness(self, navigation_manager, page_mock):
+        navigation_manager.fast_ready_waits = True
+
+        await navigation_manager.wait_for_page_load(page_mock, allow_existing_rows=True)
+
+        page_mock.wait_for_selector.assert_awaited_once_with(
+            "div.border-black-borders.flex.h-9",
+            state="attached",
+            timeout=SCROLL_PAUSE_TIME_MS,
+        )
+        page_mock.wait_for_timeout.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_v2_wait_for_page_load_preserves_bounded_timeout(self, navigation_manager, page_mock):
+        navigation_manager.fast_ready_waits = True
+        page_mock.wait_for_selector.side_effect = PlaywrightTimeoutError("not ready")
+
+        await navigation_manager.wait_for_page_load(page_mock, allow_existing_rows=True)
+
+        page_mock.wait_for_selector.assert_awaited_once()
+        page_mock.wait_for_timeout.assert_not_awaited()
 
     def test_constants(self):
         """Test that centralized constants have expected values."""

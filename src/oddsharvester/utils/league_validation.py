@@ -40,9 +40,7 @@ def football_results_url(source_url: str, season: str | None = None) -> str | No
     return f"{candidate.url}results/"
 
 
-def football_historic_results_urls(
-    source_url: str, season: str, *, current_year: int | None = None
-) -> list[str]:
+def football_historic_results_urls(source_url: str, season: str, *, current_year: int | None = None) -> list[str]:
     """Return safe OddsPortal season conventions, range first then calendar years."""
     candidate = normalize_football_league_url(source_url)
     if candidate is None:
@@ -79,7 +77,19 @@ def validate_football_results_page(
         )
 
     expected_path = urlsplit(expected_url).path.rstrip("/")
-    actual_path = urlsplit(final_url).path.rstrip("/")
+    parsed_final = urlsplit(final_url)
+    hostname = (parsed_final.hostname or "").lower()
+    if (
+        parsed_final.scheme != "https"
+        or not (hostname == "oddsportal.com" or hostname.endswith(".oddsportal.com"))
+        or parsed_final.port not in (None, 443)
+        or parsed_final.username is not None
+        or parsed_final.password is not None
+        or parsed_final.query
+        or parsed_final.fragment
+    ):
+        return FootballLeagueValidation("unavailable", "Results page redirected to an unsafe final URL.")
+    actual_path = parsed_final.path.rstrip("/")
     season_alias = None
     if actual_path != expected_path:
         candidate = normalize_football_league_url(source_url)

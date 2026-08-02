@@ -22,6 +22,35 @@ def test_parse_football_catalog_html_returns_unique_direct_league_urls():
     ]
 
 
+def test_parse_football_catalog_html_extracts_all_austrian_standings_links():
+    html = "".join(
+        f'<a href="/football/austria/{slug}/standings/">{slug}</a>'
+        for slug in (
+            "2-liga",
+            "ofb-cup",
+            "regionalliga-central",
+            "regionalliga-east",
+            "regionalliga-west",
+            "bundesliga",
+            "bundesliga-women",
+            "wien",
+        )
+    )
+
+    candidates = parse_football_catalog_html(html)
+
+    assert [candidate.slug for candidate in candidates] == [
+        "austria-2-liga",
+        "austria-bundesliga",
+        "austria-bundesliga-women",
+        "austria-ofb-cup",
+        "austria-regionalliga-central",
+        "austria-regionalliga-east",
+        "austria-regionalliga-west",
+        "austria-wien",
+    ]
+
+
 def test_parse_football_catalog_json_walks_nested_listing_values():
     candidates = parse_football_catalog_json((FIXTURES / "football_listing.json").read_text())
 
@@ -37,6 +66,7 @@ def test_parse_football_catalog_json_walks_nested_listing_values():
     [
         ("https://www.oddsportal.com/football/Australia/A-League/?page=2#overview", "australia-a-league"),
         ("https://de.oddsportal.com/football/australia/npl-nsw/", "australia-npl-nsw"),
+        ("https://www.oddsportal.com/football/austria/bundesliga/standings/", "austria-bundesliga"),
     ],
 )
 def test_normalize_football_league_url_uses_path_slugs(url, expected_slug):

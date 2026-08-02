@@ -18,6 +18,7 @@ from oddsharvester.core.market_extraction import (
     SubmarketExtractor,
 )
 from oddsharvester.core.market_extraction.line_tokens import line_name_to_token
+from oddsharvester.core.odds_portal_selectors import OddsPortalSelectors
 from oddsharvester.core.sport_market_registry import SportMarketRegistry
 from oddsharvester.core.sport_period_registry import SportPeriodRegistry
 from oddsharvester.utils.sport_market_constants import FOOTBALL_UMBRELLA_MARKETS, Sport
@@ -242,20 +243,34 @@ class OddsPortalMarketExtractor:
         )
 
         try:
+            market_already_active = (
+                self.navigation_manager.fast_ready_waits
+                and await self.navigation_manager.is_market_active(page, main_market)
+            )
             # Navigate to the main market tab
             if not await self.navigation_manager.navigate_to_market_tab(page=page, market_tab_name=main_market):
                 self.logger.error(f"Failed to find or click {main_market} tab")
                 return []
 
             # Wait for market switch to complete
-            await self.navigation_manager.wait_for_market_switch(page, main_market)
+            if not await self.navigation_manager.wait_for_market_switch(
+                page,
+                main_market,
+                already_active_before_navigation=market_already_active,
+            ):
+                return []
 
             # Ensure correct period is selected after market switch. Prefer the
             # language-independent scope code (works on localized mirrors, §7);
             # fall back to localized-label matching when no scope is verified.
+            period_already_active = False
             if sport:
                 period_enum = SportPeriodRegistry.from_internal_value(period, sport)
                 if period_enum:
+                    target_scope = OddsPortalSelectors.period_scope_code(sport, period)
+                    period_already_active = (
+                        target_scope is not None and OddsPortalSelectors.period_scope_from_url(page.url) == target_scope
+                    )
                     scope_selected = await self.period_selector.select_by_scope(
                         page=page, sport=sport, internal_period=period
                     )
@@ -287,7 +302,10 @@ class OddsPortalMarketExtractor:
                         self.logger.error(f"Failed to find or select {specific_market} within {main_market}")
                         return []
 
-                    await self.navigation_manager.wait_for_page_load(page)
+                    await self.navigation_manager.wait_for_page_load(
+                        page,
+                        allow_existing_rows=market_already_active and period_already_active and specific_market is None,
+                    )
                     # TODO: page.content() serialises the full DOM which is expensive. Consider using
                     # page.locator() selectors directly to avoid BeautifulSoup re-parse overhead.
                     html_content = await page.content()
@@ -306,7 +324,10 @@ class OddsPortalMarketExtractor:
                     self.logger.error(f"Failed to find or select {specific_market} within {main_market}")
                     return []
 
-                await self.navigation_manager.wait_for_page_load(page)
+                await self.navigation_manager.wait_for_page_load(
+                    page,
+                    allow_existing_rows=market_already_active and period_already_active and specific_market is None,
+                )
                 # TODO: page.content() serialises the full DOM which is expensive. Consider using
                 # page.locator() selectors directly to avoid BeautifulSoup re-parse overhead.
                 html_content = await page.content()
