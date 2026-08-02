@@ -3,8 +3,8 @@
 # Base image tag MUST stay aligned with the `playwright` version locked in
 # uv.lock / pinned in pyproject.toml. The MS Playwright image ships the
 # matching Chromium build; a mismatch breaks scraping at runtime.
-# Current: playwright 1.57.0  ->  base tag v1.57.0-noble
-FROM mcr.microsoft.com/playwright/python:v1.57.0-noble
+# Current: playwright 1.60.0  ->  base tag v1.60.0-noble
+FROM mcr.microsoft.com/playwright/python:v1.60.0-noble
 
 # Install uv globally
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -22,6 +22,8 @@ RUN uv sync --frozen
 # Activate the virtual environment
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Default command: OddsHarvester CLI (xvfb-run keeps a display available
-# even in --headless mode, matching prior behaviour)
-CMD ["xvfb-run", "--", "python3", "-m", "oddsharvester"]
+# CLI entrypoint: lets `docker run odds-harvester upcoming ...` append CLI
+# args directly. Playwright runs with --headless from the CLI, so no virtual
+# display (xvfb) is required — wrapping the entrypoint with xvfb-run hangs
+# the container on macOS/colima before python ever starts.
+ENTRYPOINT ["python3", "-m", "oddsharvester"]

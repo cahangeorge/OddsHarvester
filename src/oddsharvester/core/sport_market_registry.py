@@ -55,7 +55,13 @@ class SportMarketRegistrar:
         Creates a lambda function for market extraction.
         """
         return (
-            lambda extractor, page, period="FullTime", scrape_odds_history=False, target_bookmaker=None, preview_submarkets_only=False, sport=None: (
+            lambda extractor,
+            page,
+            period="FullTime",
+            scrape_odds_history=False,
+            target_bookmaker=None,
+            preview_submarkets_only=False,
+            sport=None: (
                 extractor.extract_market_odds(
                     page=page,
                     main_market=main_market,

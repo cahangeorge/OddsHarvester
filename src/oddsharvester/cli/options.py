@@ -29,6 +29,7 @@ from oddsharvester.utils.period_constants import (
     TennisPeriod,
     VolleyballPeriod,
 )
+from oddsharvester.utils.scraper_engine import ScraperEngine
 
 
 def _get_all_periods():
@@ -105,6 +106,19 @@ def common_options(func):
         help="Output file path.",
     )
     @click.option(
+        "--report-output",
+        type=click.Path(),
+        callback=validate_file_path,
+        envvar="OH_REPORT_OUTPUT",
+        help="Write a versioned JSON run report to this exact path.",
+    )
+    @click.option(
+        "--append/--no-append",
+        default=False,
+        envvar="OH_APPEND",
+        help="Append to the output file instead of overwriting it (default: overwrite).",
+    )
+    @click.option(
         "--headless/--no-headless",
         default=False,
         envvar="OH_HEADLESS",
@@ -121,6 +135,14 @@ def common_options(func):
         help="Number of concurrent scraping tasks.",
     )
     @click.option(
+        "--http-concurrency",
+        type=int,
+        default=12,
+        callback=validate_concurrency,
+        envvar="OH_HTTP_CONCURRENCY",
+        help="Concurrent Scrapling HTTP requests (default: 12; browser engines remain capped).",
+    )
+    @click.option(
         "--match-link",
         "match_links",
         multiple=True,
@@ -130,9 +152,11 @@ def common_options(func):
     @click.option(
         "--proxy-url",
         "proxy_url",
+        multiple=True,
         callback=validate_proxy_url,
         envvar="OH_PROXY_URL",
-        help="Proxy URL (e.g., http://proxy.example.com:8080 or socks5://proxy:1080).",
+        help="Proxy URL (repeatable). Format: http[s]://host:port, socks5://host:port, "
+        "or scheme://user:pass@host:port. Repeat to spread load across proxies.",
     )
     @click.option(
         "--proxy-user",
@@ -214,6 +238,14 @@ def common_options(func):
         default=1.0,
         envvar="OH_REQUEST_DELAY",
         help="Delay in seconds between match requests (default: 1.0).",
+    )
+    @click.option(
+        "--engine",
+        "scraper_engine",
+        type=click.Choice([engine.value for engine in ScraperEngine], case_sensitive=False),
+        default=ScraperEngine.PLAYWRIGHT.value,
+        envvar="OH_ENGINE",
+        help="Scraper engine: auto, playwright, camoufox, scrapling-http, or scrapling-stealth.",
     )
     @functools.wraps(func)
     def wrapper(*args, **kwargs):

@@ -94,6 +94,7 @@ class FootballEuropeanHandicapMarket(Enum):
 class FootballAsianHandicapMarket(Enum):
     """Asian Handicap market values for football (including quarters)."""
 
+    HANDICAP_MINUS_5 = "asian_handicap_-5"
     HANDICAP_MINUS_4 = "asian_handicap_-4"
     HANDICAP_MINUS_3_75 = "asian_handicap_-3_75"
     HANDICAP_MINUS_3_5 = "asian_handicap_-3_5"
@@ -119,6 +120,13 @@ class FootballAsianHandicapMarket(Enum):
     HANDICAP_PLUS_1_5 = "asian_handicap_+1_5"
     HANDICAP_PLUS_1_75 = "asian_handicap_+1_75"
     HANDICAP_PLUS_2 = "asian_handicap_+2"
+
+
+FOOTBALL_UMBRELLA_MARKETS: dict[str, str] = {
+    "over_under": "Over/Under",
+    "asian_handicap": "Asian Handicap",
+}
+"""Umbrella tokens for football that expand to all lines of a market family."""
 
 
 class TennisMarket(Enum):

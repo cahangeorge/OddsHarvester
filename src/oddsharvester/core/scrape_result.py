@@ -106,6 +106,7 @@ class ScrapeResult:
     failed: list[FailedUrl] = field(default_factory=list)
     partial: list[PartialResult] = field(default_factory=list)
     stats: ScrapeStats = field(default_factory=ScrapeStats)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -114,6 +115,7 @@ class ScrapeResult:
             "failed": [f.to_dict() for f in self.failed],
             "partial": [p.to_dict() for p in self.partial],
             "stats": self.stats.to_dict(),
+            "metadata": self.metadata,
         }
 
     def merge(self, other: "ScrapeResult") -> "ScrapeResult":
@@ -133,6 +135,7 @@ class ScrapeResult:
         self.stats.successful += other.stats.successful
         self.stats.failed += other.stats.failed
         self.stats.partial += other.stats.partial
+        self.metadata.update(other.metadata)
         return self
 
     def get_retryable_urls(self) -> list[str]:

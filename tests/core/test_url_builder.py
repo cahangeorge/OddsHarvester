@@ -1,3 +1,6 @@
+from datetime import UTC, datetime
+import json
+
 import pytest
 
 from oddsharvester.core.url_builder import URLBuilder, rebase_url
@@ -102,6 +105,28 @@ def test_get_historic_matches_url_current_is_case_insensitive(season_value):
     """'current' must be matched case-insensitively (issue #59)."""
     expected = f"{ODDSPORTAL_BASE_URL}/football/england/premier-league/results/"
     assert URLBuilder.get_historic_matches_url("football", "england-premier-league", season_value) == expected
+
+
+def test_get_historic_matches_url_explicit_current_year_range_is_suffixed():
+    """Regression (season rollover, issue #71): an explicit YYYY-YYYY range whose end
+    year equals the current calendar year must resolve to the suffixed URL, not the base
+    URL. Trusting the calendar year sent finished-season requests to the base URL, which
+    OddsPortal rolls over to the next season → wrong season scraped. Only 'current'/None
+    may use the base URL."""
+    end_year = datetime.now(UTC).year
+    season = f"{end_year - 1}-{end_year}"
+    url = URLBuilder.get_historic_matches_url("football", "england-premier-league", season)
+    assert url == f"{ODDSPORTAL_BASE_URL}/football/england/premier-league-{season}/results/"
+
+
+def test_get_historic_matches_url_prefers_exact_runtime_validated_url(monkeypatch):
+    validated_url = f"{ODDSPORTAL_BASE_URL}/football/argentina/primera-c-2025/results/"
+    monkeypatch.setenv(
+        "ODDSHARVESTER_RUNTIME_FOOTBALL_HISTORIC_URLS",
+        json.dumps({"argentina-primera-c": {"2025-2026": validated_url}}),
+    )
+
+    assert URLBuilder.get_historic_matches_url("football", "argentina-primera-c", "2025-2026") == validated_url
 
 
 @pytest.mark.parametrize(
@@ -306,12 +331,12 @@ def test_get_league_url(sport, league, expected_url):
             "2024-2025",
             f"{ODDSPORTAL_BASE_URL}/football/bulgaria/parva-liga-2024-2025/results/",
         ),
-        # 2025-2026 is the current season (end_year == current_year), so no season suffix
+        # Explicit range → always suffixed (new efbet-league slug for recent seasons)
         (
             "football",
             "bulgaria-parva-liga",
             "2025-2026",
-            f"{ODDSPORTAL_BASE_URL}/football/bulgaria/efbet-league/results/",
+            f"{ODDSPORTAL_BASE_URL}/football/bulgaria/efbet-league-2025-2026/results/",
         ),
         # No alias - current season uses canonical URL
         (

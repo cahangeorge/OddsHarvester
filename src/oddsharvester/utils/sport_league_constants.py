@@ -1,3 +1,7 @@
+import json
+import os
+
+from .league_catalog import normalize_football_league_url
 from .sport_market_constants import Sport
 
 SPORTS_LEAGUES_URLS_MAPPING = {
@@ -19,6 +23,7 @@ SPORTS_LEAGUES_URLS_MAPPING = {
         "italy-coppa-italia": "https://www.oddsportal.com/football/italy/coppa-italia",
         "usa-mls": "https://www.oddsportal.com/football/usa/mls",
         "brazil-serie-a": "https://www.oddsportal.com/football/brazil/serie-a-betano",
+        "brazil-serie-b": "https://www.oddsportal.com/football/brazil/serie-b/",
         "mexico-liga-mx": "https://www.oddsportal.com/football/mexico/liga-mx",
         "liga-portugal": "https://www.oddsportal.com/football/portugal/liga-portugal",
         "liga-portugal-2": "https://www.oddsportal.com/football/portugal/liga-portugal-2/",
@@ -362,3 +367,31 @@ SPORTS_LEAGUES_URLS_MAPPING = {
         "nations-league": "https://www.oddsportal.com/volleyball/world/nations-league/",
     },
 }
+
+
+def runtime_football_league_urls(raw: str | None) -> dict[str, str]:
+    """Load backend-validated football URLs without accepting arbitrary CLI input."""
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    validated: dict[str, str] = {}
+    for slug, url in payload.items():
+        if not isinstance(slug, str) or not isinstance(url, str):
+            continue
+        candidate = normalize_football_league_url(url)
+        if candidate is not None and candidate.slug == slug:
+            validated[slug] = candidate.url
+    return validated
+
+
+# The backend sets this only for catalog rows that passed a rendered Results
+# page validation. The allowlist is validated again here before Click sees it.
+SPORTS_LEAGUES_URLS_MAPPING[Sport.FOOTBALL].update(
+    runtime_football_league_urls(os.environ.get("ODDSHARVESTER_RUNTIME_FOOTBALL_LEAGUES"))
+)

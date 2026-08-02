@@ -1,0 +1,99 @@
+name: Safely sync upstream
+
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  BOOTSTRAP_BRANCH: codex-bet-platform-scraper-engine
+  PLATFORM_BRANCH: platform
+  UPSTREAM_BRANCH: master
+  UPSTREAM_REPOSITORY: jordantete/OddsHarvester
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream and initialise managed branches
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags upstream "refs/heads/${UPSTREAM_BRANCH}:refs/remotes/upstream/${UPSTREAM_BRANCH}"
+
+          if git ls-remote --exit-code --heads origin "${PLATFORM_BRANCH}" >/dev/null 2>&1; then
+            git fetch origin "refs/heads/${PLATFORM_BRANCH}:refs/remotes/origin/${PLATFORM_BRANCH}"
+            git checkout -B "${PLATFORM_BRANCH}" "origin/${PLATFORM_BRANCH}"
+          else
+            git fetch origin "refs/heads/${BOOTSTRAP_BRANCH}:refs/remotes/origin/${BOOTSTRAP_BRANCH}"
+            git checkout -B "${PLATFORM_BRANCH}" "origin/${BOOTSTRAP_BRANCH}"
+            git push origin "${PLATFORM_BRANCH}"
+          fi
+
+          if git log --format=%H "origin/${PLATFORM_BRANCH}..upstream/${UPSTREAM_BRANCH}" | grep -q .; then
+            echo 'changes=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changes=false' >> "$GITHUB_OUTPUT"
+          fi
+        id: upstream
+
+      - name: Prepare a merge candidate
+        if: steps.upstream.outputs.changes == 'true'
+        id: candidate
+        run: |
+          set -euo pipefail
+          branch="sync/upstream-${GITHUB_RUN_ID}"
+          git checkout -B "$branch" "origin/${PLATFORM_BRANCH}"
+          if ! git merge --no-commit --no-ff "upstream/${UPSTREAM_BRANCH}"; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            if [ -z "$conflicts" ] || printf '%s\n' "$conflicts" | grep -qv '^\.github/workflows/'; then
+              git merge --abort || true
+              exit 1
+            fi
+            git checkout --ours -- .github/workflows
+            git add .github/workflows
+          fi
+          # Keep the platform's reviewed Actions configuration out of upstream syncs.
+          git checkout "origin/${PLATFORM_BRANCH}" -- .github/workflows
+          git commit -m "chore(sync): merge upstream ${UPSTREAM_BRANCH}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v7
+        if: steps.upstream.outputs.changes == 'true'
+
+      - uses: actions/setup-python@v6
+        if: steps.upstream.outputs.changes == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install test system dependencies
+        if: steps.upstream.outputs.changes == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libxslt-dev python3-dev build-essential
+
+      - name: Validate merge candidate
+        if: steps.upstream.outputs.changes == 'true'
+        run: |
+          uv sync --all-extras --dev
+          uv run playwright install chromium
+          uv run pytest --cov=src/oddsharvester --cov-report=xml:coverage.xml --cov-report=term
+
+      - name: Publish the tested synchronization
+        if: steps.upstream.outputs.changes == 'true'
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:refs/heads/${PLATFORM_BRANCH}"

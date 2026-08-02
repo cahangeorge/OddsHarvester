@@ -1,6 +1,6 @@
 [project]
 name = "oddsharvester"
-version = "0.2.1"
+version = "0.4.0"
 description = "A Python application to scrape and manage odds data from OddsPortal website."
 authors = [{ name = "Jordan TETE", email = "tetej171@gmail.com" }]
 readme = "README.md"
@@ -32,12 +32,17 @@ dependencies = [
     "beautifulsoup4>=4.14.3",
     "boto3>=1.42.21",
     "click>=8.1.0",
+    "cryptography>=46.0.5,<50",
     "lxml>=6.0.2",
-    "playwright>=1.57.0",
-    "pytz>=2025.2"
+    "playwright==1.60.0",
+    "pytz>=2025.2",
+    "scrapling[fetchers]>=0.4.9",
+    "tzdata>=2025.2",
 ]
 
 [project.optional-dependencies]
+camoufox = ["camoufox==0.5.4"]
+stagehand = ["stagehand==3.21.0"]
 dev = [
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",

@@ -67,7 +67,17 @@ oddsharvester historic -s football -l england-premier-league --season 2024-2025 
 | 🤾 Handball          | `1x2` `home_away` `double_chance` `draw_no_bet` `over/under` `handicap`                        |
 | 🏐 Volleyball        | `home_away` `total_sets_over/under` `total_points_over/under` `asian_handicap` `correct_score` |
 
+> **Umbrella tokens (football):** `over_under` and `asian_handicap` are umbrella market tokens — pass either as `--market` and it expands at scrape time to every line OddsPortal actually renders for that match (e.g. `over_under_1_5_market`, `over_under_2_5_market`, …), instead of listing each line by hand.
+
 100+ leagues supported across all sports: Premier League, La Liga, Serie A, NBA, NFL, MLB, NHL, ATP/WTA Grand Slams, and [many more](src/oddsharvester/utils/sport_league_constants.py).
+
+To discover football leagues exposed by the current live listing without treating them as automatically supported, run:
+
+```bash
+uv run python scripts/discover_football_catalog.py --output artifacts/football-candidates.json
+```
+
+The generated entries are deliberately marked `validation_pending`. Validate each candidate's results page before adding it to the supported league constants or another platform catalog.
 
 ---
 
@@ -89,10 +99,10 @@ oddsharvester upcoming -s football -l england-premier-league -m 1x2,btts --headl
 # Multiple leagues
 oddsharvester upcoming -s football -l england-premier-league,spain-laliga -m 1x2 --headless
 
-# Specific match URLs
+# Specific match URLs (repeat the flag; works for past matches too)
 oddsharvester upcoming -s football --match-link "https://www.oddsportal.com/football/..." -m 1x2
 
-# Preview mode (faster — average odds only, no individual bookmakers)
+# Preview mode (faster — best/highest odds only, no individual bookmakers)
 oddsharvester upcoming -s football -d 20250301 -m over_under --preview-only --headless
 ```
 
@@ -112,6 +122,9 @@ oddsharvester historic -s football -l england-premier-league --season 2022-2023 
 
 # Output as CSV
 oddsharvester historic -s football -l england-premier-league --season 2024-2025 -m 1x2 -f csv -o premier_league_odds --headless
+
+# Umbrella market — expands to every Over/Under line rendered on the page
+oddsharvester historic -s football -l england-premier-league --season 2023-2024 --market over_under -f csv
 ```
 
 ### CLI Options Reference
@@ -124,7 +137,9 @@ oddsharvester historic -s football -l england-premier-league --season 2024-2025 
 | `--date`       | `-d`  | Target date in `YYYYMMDD` format                                           | —          |
 | `--league`     | `-l`  | Comma-separated league slugs (e.g. `england-premier-league`)               | —          |
 | `--market`     | `-m`  | Comma-separated markets (e.g. `1x2,btts`)                                  | —          |
-| `--match-link` |       | Specific match URL (repeatable). Overrides `--sport`, `--date`, `--league` | —          |
+| `--match-link` |       | Specific match URL (repeatable). Skips listing pages; `--date`/`--league`/`--season` are then ignored | —          |
+
+**`--match-link` usage:** `--sport` is still required. Prefer `upcoming` over `historic` for arbitrary match URLs: match links bypass the listing pages entirely, so `upcoming` also works for matches already played, while `historic` would additionally demand a `--season` it never uses.
 
 **`upcoming` only:** `--date` is required unless `--league` or `--match-link` is provided. `--date` and `--league` can be combined to filter the league's upcoming matches down to a specific calendar day. When combining both, the reference timezone for resolving the date is `--timezone` if provided, otherwise UTC.
 
@@ -137,11 +152,20 @@ oddsharvester historic -s football -l england-premier-league --season 2024-2025 
 
 #### Output Options
 
-| Option      | Short | Description              | Default        |
-| ----------- | ----- | ------------------------ | -------------- |
-| `--storage` |       | `local` or `remote` (S3) | `local`        |
-| `--format`  | `-f`  | `json` or `csv`          | `json`         |
-| `--output`  | `-o`  | Output file path         | `scraped_data` |
+| Option      | Short | Description                                                                | Default        |
+| ----------- | ----- | -------------------------------------------------------------------------- | -------------- |
+| `--storage` |       | `local` or `remote` (S3)                                                   | `local`        |
+| `--format`  | `-f`  | `json` or `csv`                                                            | `json`         |
+| `--output`  | `-o`  | Output file path                                                           | `scraped_data` |
+| `--report-output` | | Exact path for an additive, versioned JSON run report                      | —              |
+| `--append`  |       | Append to the output file instead of overwriting it (`--no-append` to opt out explicitly) | `--no-append`  |
+
+`--report-output` does not change the primary JSON/CSV payload: the main output remains the same list of scraped match records. The separate report is intended for automation and contains `schema_version`, command status, requested/used engines, source inputs, locale, timezone, numeric stats, detailed failures, warnings, and UTC timing. Reports currently use schema version `1.0`.
+
+```bash
+oddsharvester upcoming -s football -l england-premier-league -m 1x2 --headless \
+  --output artifacts/matches --report-output artifacts/run-report.json
+```
 
 #### Browser & Scraping Options
 
@@ -157,13 +181,25 @@ oddsharvester historic -s football -l england-premier-league --season 2024-2025 
 
 #### Proxy Options
 
-| Option         | Description                                |
-| -------------- | ------------------------------------------ |
-| `--proxy-url`  | Proxy URL (`http://...` or `socks5://...`) |
-| `--proxy-user` | Proxy username                             |
-| `--proxy-pass` | Proxy password                             |
+| Option         | Description                                                                                                                                                             |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--proxy-url`  | Proxy URL (`http://...` or `socks5://...`). **Repeatable** — pass it multiple times to rotate per-match scraping round-robin across proxies. Each URL may embed credentials (`scheme://user:pass@host:port`). |
+| `--proxy-user` | Proxy username. Applies only when a **single** `--proxy-url` without embedded credentials is given; ignored (with a warning) if multiple proxies are passed.           |
+| `--proxy-pass` | Proxy password. Same single-proxy restriction as `--proxy-user`.                                                                                                       |
 
 > **Tip:** For best results, match `--locale` and `--timezone` to your proxy's region.
+
+**Multi-proxy example** — spread scraping across three proxies with embedded credentials:
+
+```bash
+oddsharvester historic --sport football --leagues england-premier-league --season 2013-2014 \
+  --markets 1x2 --concurrency 6 \
+  --proxy-url http://user:pass@p1.example.com:8000 \
+  --proxy-url http://user:pass@p2.example.com:8000 \
+  --proxy-url http://user:pass@p3.example.com:8000
+```
+
+Matches are dispatched round-robin across the proxies; a proxy that fails 3 times in a row (navigation/rate-limit errors) is dropped from rotation and the run continues on the survivors.
 
 #### Advanced Options
 
@@ -172,7 +208,7 @@ oddsharvester historic -s football -l england-premier-league --season 2024-2025 
 | `--target-bookmaker` | Filter odds for a specific bookmaker                   | —              |
 | `--odds-history`     | Include historical odds movement per match             | `False`        |
 | `--odds-format`      | Odds display format                                    | `Decimal Odds` |
-| `--preview-only`     | Fast mode — average odds only, no bookmaker details    | `False`        |
+| `--preview-only`     | Fast mode — best/highest odds, no bookmaker details    | `False`        |
 | `--bookies-filter`   | Bookmaker filter: `all`, `classic`, or `crypto`        | `all`          |
 | `--period`           | Match period (sport-specific: full-time, halves, etc.) | sport default  |
 
@@ -183,12 +219,12 @@ oddsharvester historic -s football -l england-premier-league --season 2024-2025 
 | Aspect           | Full Mode                   | Preview Mode                  |
 | ---------------- | --------------------------- | ----------------------------- |
 | **Speed**        | Slower (interactive)        | Faster (passive)              |
-| **Data**         | All submarkets + bookmakers | Visible submarkets + avg odds |
-| **Bookmakers**   | Individual bookmaker odds   | Average odds only             |
+| **Data**         | All submarkets + bookmakers | Visible submarkets + best odds |
+| **Bookmakers**   | Individual bookmaker odds   | Best/highest odds only        |
 | **Odds History** | Available                   | Not available                 |
-| **Structure**    | By bookmaker                | By submarket (avg odds)       |
+| **Structure**    | By bookmaker                | By submarket (best odds)      |
 
-Preview mode (`--preview-only`) is useful for quick exploration, testing data format, or light monitoring with reduced resource usage.
+Preview mode (`--preview-only`) is useful for quick exploration, testing data format, or light monitoring with reduced resource usage. It reads the collapsed submarket row — the single best/highest price OddsPortal shows per line, not a per-bookmaker breakdown and not a computed average (see `docs/agentic-gotchas.md` §12).
 
 </details>
 
@@ -210,16 +246,28 @@ All CLI options can be set via environment variables — useful for Docker or CI
 | `OH_STORAGE`       | `--storage`       | Storage type (local/remote)  |
 | `OH_FORMAT`        | `--format`        | Output format (json/csv)     |
 | `OH_FILE_PATH`     | `--output`        | Output file path             |
+| `OH_REPORT_OUTPUT` | `--report-output` | Versioned JSON report path   |
+| `OH_APPEND`        | `--append`        | Append to the output file instead of overwriting |
 | `OH_HEADLESS`      | `--headless`      | Run in headless mode         |
 | `OH_CONCURRENCY`   | `--concurrency`   | Number of concurrent tasks   |
 | `OH_REQUEST_DELAY` | `--request-delay` | Delay between requests (sec) |
-| `OH_PROXY_URL`     | `--proxy-url`     | Proxy server URL             |
+| `OH_XHR_GEO` | HTTP XHR fast path | Two-letter market/provider geography (default: `RO`); use proxies from the same target geography |
+| `OH_XHR_COOLDOWN_BASE` | HTTP XHR fast path | Initial same-egress cooldown after a block/rate-limit (default: `15` seconds) |
+| `OH_XHR_COOLDOWN_MAX` | HTTP XHR fast path | Maximum exponential same-egress cooldown (default: `300` seconds) |
+| `OH_PROXY_URL`     | `--proxy-url`     | Proxy server URL(s) — space-separated for multiple proxies |
 | `OH_PROXY_USER`    | `--proxy-user`    | Proxy username               |
 | `OH_PROXY_PASS`    | `--proxy-pass`    | Proxy password               |
 | `OH_USER_AGENT`    | `--user-agent`    | Custom browser user agent    |
 | `OH_LOCALE`        | `--locale`        | Browser locale               |
 | `OH_TIMEZONE`      | `--timezone`      | Browser timezone ID          |
 | `OH_BASE_URL`      | `--base-url`      | Regional OddsPortal mirror base URL |
+
+Without proxies, keep `scraper-engine=auto`: XHR remains the fast path, while
+the direct IP is paced with jitter and exponential cooldown before Scrapling
+stealth, Playwright, or Camoufox reuse the same egress. Successful requests
+reset the backoff; after a cooldown an open direct-egress circuit permits one
+half-open probe. Setting both cooldown variables to `0` disables only the
+adaptive wait and is not recommended for live scraping.
 
 </details>
 
@@ -230,6 +278,12 @@ export OH_PROXY_URL=http://proxy.example.com:8080
 
 oddsharvester upcoming -d 20250301 -m 1x2
 ```
+
+---
+
+## Scheduled scraper health
+
+The weekly `Scraper Health Check` workflow runs configuration tests followed by one bounded `upcoming` and one bounded `historic` live canary against a single match URL. Each canary has a ten-minute process timeout, the job has a 25-minute timeout, and failures are not converted to successful exits. The workflow verifies that both versioned reports contain at least one clean successful match and uploads the primary outputs and reports as run evidence even when a canary fails.
 
 ---
 
@@ -279,20 +333,19 @@ oddsharvester --help
 # Build
 docker build -t odds-harvester:local .
 
-# Run
-docker run --rm odds-harvester:local \
-  python3 -m oddsharvester upcoming -s football -d 20250301 -m 1x2 --headless
+# Run (CLI args are appended to the ENTRYPOINT `python3 -m oddsharvester`)
+docker run --rm odds-harvester:local upcoming -s football -d 20250301 -m 1x2 --headless
 
 # Run and keep the JSON output on the host (mount a volume + use -o)
+# On macOS+colima, prefer a path under $HOME (e.g. $PWD); /tmp is not shared by default.
 docker run --rm -v "$PWD/_docker_out:/out" odds-harvester:local \
-  xvfb-run -- python3 -m oddsharvester upcoming \
-  -s football -d 20250301 -m 1x2 --headless -o /out/result.json
+  upcoming -s football -d 20250301 -m 1x2 --headless -o /out/result.json
 
 # Or with environment variables
 docker run --rm \
   -e OH_SPORT=football \
   -e OH_HEADLESS=true \
-  odds-harvester:local python3 -m oddsharvester upcoming -d 20250301 -m 1x2
+  odds-harvester:local upcoming -d 20250301 -m 1x2
 ```
 
 ---
