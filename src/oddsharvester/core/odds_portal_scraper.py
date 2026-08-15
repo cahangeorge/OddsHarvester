@@ -201,7 +201,7 @@ class OddsPortalScraper(BaseScraper):
 
         if not match_links:
             self.logger.warning("No match links found for upcoming matches.")
-            return ScrapeResult()
+            return ScrapeResult(metadata={"discovery_outcome": "no_fixtures"})
 
         return await self.extract_match_odds(
             sport=sport,
