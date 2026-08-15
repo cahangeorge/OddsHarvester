@@ -7,7 +7,7 @@ from oddsharvester.core.odds_portal_market_extractor import OddsPortalMarketExtr
 from oddsharvester.core.odds_portal_scraper import OddsPortalScraper
 from oddsharvester.core.playwright_manager import PlaywrightManager
 from oddsharvester.core.retry import TRANSIENT_ERROR_KEYWORDS
-from oddsharvester.core.scrape_result import ErrorType, FailedUrl, ScrapeResult, ScrapeStats
+from oddsharvester.core.scrape_result import ErrorType, FailedUrl, PartialResult, ScrapeResult, ScrapeStats
 from oddsharvester.core.scraper_app import _scrape_multiple_leagues, retry_scrape, run_scraper
 from oddsharvester.core.scrapling_scraper import ScraplingUnavailableError, StaticListingRequiresBrowserError
 from oddsharvester.utils.command_enum import CommandEnum
@@ -779,8 +779,17 @@ async def test_scrape_multiple_leagues_mixed_success_and_no_fixtures_does_not_at
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("invalid_result", [Exception("Network error"), ScrapeResult()])
-async def test_scrape_multiple_leagues_no_fixtures_with_unattested_result_does_not_attest_no_fixtures(invalid_result):
+@pytest.mark.parametrize(
+    ("invalid_result", "expected_error_type", "expected_message"),
+    [
+        (Exception("Network error"), ErrorType.NAVIGATION, "Network error"),
+        (ScrapeResult(), ErrorType.UNKNOWN, "League scraper returned an unattested empty result"),
+        (None, ErrorType.UNKNOWN, "League scraper returned no result"),
+    ],
+)
+async def test_scrape_multiple_leagues_no_fixtures_with_unattested_result_does_not_attest_no_fixtures(
+    invalid_result, expected_error_type, expected_message
+):
     scraper_mock = MagicMock()
     scrape_func_mock = AsyncMock(
         side_effect=[
@@ -798,6 +807,64 @@ async def test_scrape_multiple_leagues_no_fixtures_with_unattested_result_does_n
         )
 
     assert "discovery_outcome" not in result.metadata
+    assert result.stats.total_urls == 1
+    assert result.stats.failed == 1
+    assert len(result.failed) == 1
+    assert result.failed[0].url == "league://football/spain-primera-division"
+    assert result.failed[0].error_type == expected_error_type
+    assert result.failed[0].error_message == expected_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_first", [False, True])
+@pytest.mark.parametrize(
+    "invalid_result",
+    [
+        ScrapeResult(
+            success=[{"match": "inconsistent"}],
+            stats=ScrapeStats(total_urls=0, successful=1),
+            metadata={"discovery_outcome": "no_fixtures"},
+        ),
+        ScrapeResult(
+            failed=[
+                FailedUrl(
+                    url="https://example.test/failed",
+                    error_type=ErrorType.NAVIGATION,
+                    error_message="navigation failed",
+                )
+            ],
+            stats=ScrapeStats(total_urls=1, failed=1),
+        ),
+        ScrapeResult(
+            partial=[PartialResult(url="https://example.test/partial", data={})],
+            stats=ScrapeStats(total_urls=1, partial=1),
+        ),
+    ],
+)
+async def test_scrape_multiple_leagues_no_fixtures_with_non_benign_result_fails_closed(
+    invalid_result, invalid_first
+):
+    scraper_mock = MagicMock()
+    no_fixtures = ScrapeResult(
+        stats=ScrapeStats(total_urls=0),
+        metadata={"discovery_outcome": "no_fixtures"},
+    )
+    side_effect = [invalid_result, no_fixtures] if invalid_first else [no_fixtures, invalid_result]
+    scrape_func_mock = AsyncMock(side_effect=side_effect)
+
+    with patch("oddsharvester.core.scraper_app.retry_scrape", scrape_func_mock):
+        result = await _scrape_multiple_leagues(
+            scraper=scraper_mock,
+            scrape_func=scrape_func_mock,
+            leagues=["england-premier-league", "spain-primera-division"],
+            sport="football",
+        )
+
+    assert "discovery_outcome" not in result.metadata
+    assert result.success == invalid_result.success
+    assert result.failed == invalid_result.failed
+    assert result.partial == invalid_result.partial
+    assert result.stats == invalid_result.stats
 
 
 @pytest.mark.asyncio

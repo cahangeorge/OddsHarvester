@@ -206,7 +206,7 @@ async def test_extract_match_links(re_mock, bs4_mock, setup_base_scraper_mocks):
 @pytest.mark.asyncio
 @patch("oddsharvester.core.base_scraper.BeautifulSoup")
 async def test_extract_match_links_error(bs4_mock, setup_base_scraper_mocks):
-    """Test handling errors when extracting match links."""
+    """Extraction errors propagate so callers cannot report false no-fixtures results."""
     mocks = setup_base_scraper_mocks
     scraper = mocks["scraper"]
     page_mock = mocks["page_mock"]
@@ -214,11 +214,8 @@ async def test_extract_match_links_error(bs4_mock, setup_base_scraper_mocks):
     # Mock an exception in BeautifulSoup processing
     bs4_mock.side_effect = Exception("Parsing error")
 
-    # Call the method under test
-    result = await scraper.extract_match_links(page=page_mock)
-
-    # Verify error handling
-    assert result == []
+    with pytest.raises(Exception, match="Parsing error"):
+        await scraper.extract_match_links(page=page_mock)
 
 
 # -- skip_started filter (GitHub issue #58) ---------------------------------

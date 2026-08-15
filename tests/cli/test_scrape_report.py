@@ -121,6 +121,47 @@ def test_v11_zero_urls_without_attestation_is_failed(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("result", "expected_status"),
+    [
+        (
+            ScrapeResult(
+                stats=ScrapeStats(total_urls=1),
+                metadata={"discovery_outcome": "no_fixtures"},
+            ),
+            "failed",
+        ),
+        (
+            ScrapeResult(
+                success=[{"match": "inconsistent"}],
+                stats=ScrapeStats(total_urls=1, successful=1),
+                metadata={"discovery_outcome": "no_fixtures"},
+            ),
+            "success",
+        ),
+    ],
+)
+def test_v11_inconsistent_no_fixtures_metadata_is_not_reported_as_no_fixtures(tmp_path, result, expected_status):
+    started_at = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
+    output = tmp_path / "report.json"
+
+    write_scrape_report(
+        str(output),
+        command="upcoming",
+        result=result,
+        requested_engine="playwright",
+        source={"sport": "football"},
+        locale=None,
+        timezone=None,
+        started_at=started_at,
+        finished_at=started_at,
+    )
+
+    report = json.loads(output.read_text())
+    assert report["status"] == expected_status
+    assert report["outcome"] == expected_status
+
+
+@pytest.mark.parametrize(
     ("command", "args", "patch_target"),
     [
         (
@@ -164,6 +205,79 @@ def test_cli_report_is_additive_and_primary_output_stays_a_list(tmp_path, comman
         "cache": {},
         "repair": {"status": "repair_skipped", "reason": "not_requested"},
     }
+
+
+def test_upcoming_cli_persists_truthful_no_fixtures_and_exits_successfully(tmp_path):
+    primary_output = tmp_path / "matches.json"
+    report_output = tmp_path / "report.json"
+    no_fixtures = ScrapeResult(
+        stats=ScrapeStats(total_urls=0),
+        metadata={"discovery_outcome": "no_fixtures"},
+    )
+
+    with (
+        patch(
+            "oddsharvester.cli.commands.upcoming.run_scraper",
+            new_callable=AsyncMock,
+            return_value=no_fixtures,
+        ),
+        patch("oddsharvester.cli.commands.upcoming.store_data") as store,
+    ):
+        invocation = CliRunner().invoke(
+            cli,
+            [
+                "upcoming",
+                "-s",
+                "football",
+                "-l",
+                "england-premier-league",
+                "--output",
+                str(primary_output),
+                "--report-output",
+                str(report_output),
+            ],
+        )
+
+    assert invocation.exit_code == 0, invocation.output
+    assert store.call_args.kwargs["data"] == []
+    report = json.loads(report_output.read_text())
+    assert report["status"] == "success"
+    assert report["outcome"] == "no_fixtures"
+
+
+def test_upcoming_cli_rejects_inconsistent_no_fixtures_metadata(tmp_path):
+    report_output = tmp_path / "report.json"
+    inconsistent = ScrapeResult(
+        stats=ScrapeStats(total_urls=1),
+        metadata={"discovery_outcome": "no_fixtures"},
+    )
+
+    with (
+        patch(
+            "oddsharvester.cli.commands.upcoming.run_scraper",
+            new_callable=AsyncMock,
+            return_value=inconsistent,
+        ),
+        patch("oddsharvester.cli.commands.upcoming.store_data") as store,
+    ):
+        invocation = CliRunner().invoke(
+            cli,
+            [
+                "upcoming",
+                "-s",
+                "football",
+                "-l",
+                "england-premier-league",
+                "--report-output",
+                str(report_output),
+            ],
+        )
+
+    assert invocation.exit_code == 1
+    store.assert_not_called()
+    report = json.loads(report_output.read_text())
+    assert report["status"] == "failed"
+    assert report["outcome"] == "failed"
 
 
 def test_cli_writes_failed_report_when_scraper_raises(tmp_path):

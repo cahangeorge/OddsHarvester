@@ -266,6 +266,30 @@ async def test_scrape_upcoming_no_fixtures_attests_discovery_outcome(url_builder
 
 
 @pytest.mark.asyncio
+@patch("oddsharvester.core.odds_portal_scraper.URLBuilder")
+async def test_scrape_upcoming_propagates_match_link_extraction_failure(url_builder_mock, setup_scraper_mocks):
+    """A DOM extraction failure must not be attested as a benign empty listing."""
+    mocks = setup_scraper_mocks
+    scraper = mocks["scraper"]
+    page_mock = mocks["page_mock"]
+
+    url_builder_mock.get_upcoming_matches_url.return_value = "https://oddsportal.com/football/england/premier-league"
+    scraper._prepare_page_for_scraping = AsyncMock()
+    scraper.extract_match_odds = AsyncMock()
+    page_mock.content.side_effect = RuntimeError("DOM extraction failed")
+
+    with pytest.raises(RuntimeError, match="DOM extraction failed"):
+        await scraper.scrape_upcoming(
+            sport="football",
+            date="20260601",
+            league="premier-league",
+            markets=["1x2"],
+        )
+
+    scraper.extract_match_odds.assert_not_called()
+
+
+@pytest.mark.asyncio
 @patch("oddsharvester.core.odds_portal_scraper.ODDSPORTAL_BASE_URL", "https://oddsportal.com")
 async def test_scrape_matches(setup_scraper_mocks):
     """Test scraping specific match links."""

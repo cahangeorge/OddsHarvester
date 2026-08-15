@@ -67,7 +67,7 @@ def write_scrape_report(
 def _status(result: ScrapeResult | None, exception_type: str | None) -> str:
     if exception_type or not result:
         return "failed"
-    if result.metadata.get("discovery_outcome") == "no_fixtures":
+    if result.is_truthful_no_fixtures():
         return "success"
     if not result.success:
         return "failed"
@@ -79,7 +79,7 @@ def _status(result: ScrapeResult | None, exception_type: str | None) -> str:
 def _outcome(result: ScrapeResult | None, exception_type: str | None) -> str:
     if exception_type:
         return "failed"
-    if result and result.metadata.get("discovery_outcome") == "no_fixtures":
+    if result and result.is_truthful_no_fixtures():
         return "no_fixtures"
     return _status(result, exception_type)
 

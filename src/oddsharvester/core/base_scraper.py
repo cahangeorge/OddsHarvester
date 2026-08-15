@@ -414,7 +414,7 @@ class BaseScraper:
 
         except Exception as e:
             self.logger.error(f"Error extracting match links: {e}", exc_info=True)
-            return []
+            raise
 
     async def _warm_proxy_contexts(self):
         """Warm each non-default proxy context once.

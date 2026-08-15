@@ -80,7 +80,16 @@ def upcoming(ctx, **kwargs):
         )
         _write_report(kwargs, scraped_data, sport.value if sport else None, requested_engine, started_at)
 
-        if scraped_data and scraped_data.success:
+        if scraped_data and scraped_data.is_truthful_no_fixtures():
+            store_data(
+                storage_type=storage.value if storage else "local",
+                data=[],
+                storage_format=storage_format.value if storage_format else "json",
+                file_path=kwargs.get("file_path"),
+                append=kwargs.get("append", False),
+            )
+            click.echo("No upcoming fixtures found.")
+        elif scraped_data and scraped_data.success:
             store_data(
                 storage_type=storage.value if storage else "local",
                 data=scraped_data.success,

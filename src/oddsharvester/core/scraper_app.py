@@ -16,8 +16,8 @@ from oddsharvester.core.oddsportal_xhr import (
     OddsPortalXHRSchemaError,
 )
 from oddsharvester.core.playwright_manager import PlaywrightManager
-from oddsharvester.core.retry import RetryConfig, is_retryable_error, retry_with_backoff
-from oddsharvester.core.scrape_result import ErrorType, ScrapeResult
+from oddsharvester.core.retry import RetryConfig, classify_error, is_retryable_error, retry_with_backoff
+from oddsharvester.core.scrape_result import ErrorType, FailedUrl, ScrapeResult
 from oddsharvester.core.scrapling_scraper import (
     DEFAULT_EGRESS_COOLDOWN_BASE_SECONDS,
     DEFAULT_EGRESS_COOLDOWN_MAX_SECONDS,
@@ -417,7 +417,7 @@ async def run_scraper(
                         }
                     )
                     break
-                if _is_truthful_no_fixtures(scrapling_result):
+                if isinstance(scrapling_result, ScrapeResult) and scrapling_result.is_truthful_no_fixtures():
                     return await with_execution_metadata(scrapling_result)
                 if scrapling_result and scrapling_result.success and not scrapling_result.failed:
                     return await with_execution_metadata(scrapling_result)
@@ -650,11 +650,34 @@ async def _scrape_multiple_leagues(
 
             league_result = await retry_scrape(scrape_func, sport=sport, league=league, **kwargs)
 
-            if _is_truthful_no_fixtures(league_result):
+            if isinstance(league_result, ScrapeResult) and league_result.is_truthful_no_fixtures():
                 logger.info(f"No fixtures discovered for league: {league}")
                 continue
 
             all_leagues_no_fixtures = False
+            if league_result is None:
+                error_message = "League scraper returned no result"
+                logger.warning(f"{error_message} for league: {league}")
+                failed_leagues.append(league)
+                _record_league_failure(combined_result, sport, league, error_message, ErrorType.UNKNOWN)
+                continue
+
+            if (
+                isinstance(league_result, ScrapeResult)
+                and not league_result.success
+                and not league_result.failed
+                and not league_result.partial
+                and league_result.stats.total_urls == 0
+                and league_result.stats.successful == 0
+                and league_result.stats.failed == 0
+                and league_result.stats.partial == 0
+            ):
+                error_message = "League scraper returned an unattested empty result"
+                logger.warning(f"{error_message} for league: {league}")
+                failed_leagues.append(league)
+                _record_league_failure(combined_result, sport, league, error_message, ErrorType.UNKNOWN)
+                continue
+
             if league_result and league_result.success:
                 combined_result.merge(league_result)
                 logger.info(
@@ -672,6 +695,8 @@ async def _scrape_multiple_leagues(
             logger.error(f"Failed to scrape league '{league}': {e}")
             failed_leagues.append(league)
             all_leagues_no_fixtures = False
+            error_message = str(e)
+            _record_league_failure(combined_result, sport, league, error_message)
             continue
 
     if all_leagues_no_fixtures:
@@ -693,14 +718,24 @@ async def _scrape_multiple_leagues(
     return combined_result
 
 
-def _is_truthful_no_fixtures(result: ScrapeResult | None) -> bool:
-    return bool(
-        isinstance(result, ScrapeResult)
-        and result.metadata.get("discovery_outcome") == "no_fixtures"
-        and result.stats.total_urls == 0
-        and not result.failed
-        and not result.partial
+def _record_league_failure(
+    result: ScrapeResult,
+    sport: str | None,
+    league: str,
+    error_message: str,
+    error_type: ErrorType | None = None,
+) -> None:
+    result.failed.append(
+        FailedUrl(
+            url=f"league://{sport or 'unknown'}/{league}",
+            error_type=error_type or classify_error(error_message),
+            error_message=error_message,
+            attempts=1,
+            is_retryable=is_retryable_error(error_message),
+        )
     )
+    result.stats.total_urls += 1
+    result.stats.failed += 1
 
 
 def _should_try_camoufox(result: ScrapeResult | None) -> bool:

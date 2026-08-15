@@ -108,6 +108,19 @@ class ScrapeResult:
     stats: ScrapeStats = field(default_factory=ScrapeStats)
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def is_truthful_no_fixtures(self) -> bool:
+        """Return whether this result strictly attests a benign empty discovery."""
+        return bool(
+            self.metadata.get("discovery_outcome") == "no_fixtures"
+            and self.stats.total_urls == 0
+            and self.stats.successful == 0
+            and self.stats.failed == 0
+            and self.stats.partial == 0
+            and not self.success
+            and not self.failed
+            and not self.partial
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
