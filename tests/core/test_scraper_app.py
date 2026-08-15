@@ -734,6 +734,73 @@ async def test_scrape_multiple_leagues_success():
 
 
 @pytest.mark.asyncio
+async def test_scrape_multiple_leagues_all_truthful_no_fixtures_attests_aggregate_outcome():
+    scraper_mock = MagicMock()
+    scrape_func_mock = AsyncMock(
+        side_effect=[
+            ScrapeResult(stats=ScrapeStats(total_urls=0), metadata={"discovery_outcome": "no_fixtures"}),
+            ScrapeResult(stats=ScrapeStats(total_urls=0), metadata={"discovery_outcome": "no_fixtures"}),
+        ]
+    )
+
+    with patch("oddsharvester.core.scraper_app.retry_scrape", scrape_func_mock):
+        result = await _scrape_multiple_leagues(
+            scraper=scraper_mock,
+            scrape_func=scrape_func_mock,
+            leagues=["england-premier-league", "spain-primera-division"],
+            sport="football",
+        )
+
+    assert result.metadata == {"discovery_outcome": "no_fixtures"}
+    assert result.stats == ScrapeStats()
+
+
+@pytest.mark.asyncio
+async def test_scrape_multiple_leagues_mixed_success_and_no_fixtures_does_not_attest_no_fixtures():
+    scraper_mock = MagicMock()
+    scrape_func_mock = AsyncMock(
+        side_effect=[
+            ScrapeResult(stats=ScrapeStats(total_urls=1, successful=1), success=[{"match": "data"}]),
+            ScrapeResult(stats=ScrapeStats(total_urls=0), metadata={"discovery_outcome": "no_fixtures"}),
+        ]
+    )
+
+    with patch("oddsharvester.core.scraper_app.retry_scrape", scrape_func_mock):
+        result = await _scrape_multiple_leagues(
+            scraper=scraper_mock,
+            scrape_func=scrape_func_mock,
+            leagues=["england-premier-league", "spain-primera-division"],
+            sport="football",
+        )
+
+    assert result.success == [{"match": "data"}]
+    assert result.stats.successful == 1
+    assert "discovery_outcome" not in result.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_result", [Exception("Network error"), ScrapeResult()])
+async def test_scrape_multiple_leagues_no_fixtures_with_unattested_result_does_not_attest_no_fixtures(invalid_result):
+    scraper_mock = MagicMock()
+    scrape_func_mock = AsyncMock(
+        side_effect=[
+            ScrapeResult(stats=ScrapeStats(total_urls=0), metadata={"discovery_outcome": "no_fixtures"}),
+            invalid_result,
+        ]
+    )
+
+    with patch("oddsharvester.core.scraper_app.retry_scrape", scrape_func_mock):
+        result = await _scrape_multiple_leagues(
+            scraper=scraper_mock,
+            scrape_func=scrape_func_mock,
+            leagues=["england-premier-league", "spain-primera-division"],
+            sport="football",
+        )
+
+    assert "discovery_outcome" not in result.metadata
+
+
+@pytest.mark.asyncio
 async def test_scrape_multiple_leagues_with_failures():
     """Test _scrape_multiple_leagues with some league failures."""
     scraper_mock = MagicMock()

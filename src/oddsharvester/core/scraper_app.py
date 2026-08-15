@@ -640,6 +640,7 @@ async def _scrape_multiple_leagues(
     """
     combined_result = ScrapeResult()
     failed_leagues = []
+    all_leagues_no_fixtures = bool(leagues)
 
     logger.info(f"Starting multi-league scraping for {len(leagues)} leagues: {leagues}")
 
@@ -649,6 +650,11 @@ async def _scrape_multiple_leagues(
 
             league_result = await retry_scrape(scrape_func, sport=sport, league=league, **kwargs)
 
+            if _is_truthful_no_fixtures(league_result):
+                logger.info(f"No fixtures discovered for league: {league}")
+                continue
+
+            all_leagues_no_fixtures = False
             if league_result and league_result.success:
                 combined_result.merge(league_result)
                 logger.info(
@@ -665,7 +671,13 @@ async def _scrape_multiple_leagues(
         except Exception as e:
             logger.error(f"Failed to scrape league '{league}': {e}")
             failed_leagues.append(league)
+            all_leagues_no_fixtures = False
             continue
+
+    if all_leagues_no_fixtures:
+        combined_result.metadata["discovery_outcome"] = "no_fixtures"
+    else:
+        combined_result.metadata.pop("discovery_outcome", None)
 
     successful_leagues = len(leagues) - len(failed_leagues)
 
