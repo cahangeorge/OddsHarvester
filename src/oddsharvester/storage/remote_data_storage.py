@@ -5,19 +5,23 @@ from typing import Any
 
 import boto3
 
-_DEFAULT_S3_BUCKET = ""  # Must be configured via OH_S3_BUCKET env var
-_DEFAULT_AWS_REGION = ""  # Must be configured via OH_AWS_REGION env var
-
 
 class RemoteDataStorage:
-    S3_BUCKET_NAME = os.environ.get("OH_S3_BUCKET", _DEFAULT_S3_BUCKET)
-    AWS_REGION = os.environ.get("OH_AWS_REGION", _DEFAULT_AWS_REGION)
-
     def __init__(self):
         """
         Initializes the RemoteDataStorage class with an S3 client and logger.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.S3_BUCKET_NAME = os.environ.get("OH_S3_BUCKET", "").strip()
+        self.AWS_REGION = os.environ.get("OH_AWS_REGION", "").strip()
+        missing = [
+            name
+            for name, value in (("OH_S3_BUCKET", self.S3_BUCKET_NAME), ("OH_AWS_REGION", self.AWS_REGION))
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"Missing required S3 configuration: {', '.join(missing)}")
+
         self.s3_client = boto3.client("s3", region_name=self.AWS_REGION)
         self.logger.info(
             f"RemoteDataStorage initialized for region: {self.AWS_REGION} and bucket: {self.S3_BUCKET_NAME}"

@@ -1,5 +1,5 @@
 import json
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from botocore.exceptions import BotoCoreError, NoCredentialsError
 import pytest
@@ -8,8 +8,11 @@ from oddsharvester.storage.remote_data_storage import RemoteDataStorage
 
 
 @pytest.fixture
-def remote_data_storage():
-    return RemoteDataStorage()
+def remote_data_storage(monkeypatch):
+    monkeypatch.setenv("OH_S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("OH_AWS_REGION", "eu-west-3")
+    with patch("oddsharvester.storage.remote_data_storage.boto3.client", return_value=MagicMock()):
+        return RemoteDataStorage()
 
 
 @pytest.fixture
@@ -20,35 +23,39 @@ def sample_data():
 def test_initialization(remote_data_storage):
     assert remote_data_storage.s3_client is not None
     assert remote_data_storage.logger is not None
-    assert remote_data_storage.S3_BUCKET_NAME == "odds-portal-scrapped-odds-cad8822c179f12cg"
+    assert remote_data_storage.S3_BUCKET_NAME == "test-bucket"
     assert remote_data_storage.AWS_REGION == "eu-west-3"
 
 
-def test_env_var_override_bucket():
-    with patch.dict("os.environ", {"OH_S3_BUCKET": "my-custom-bucket"}):
-        # Re-import to pick up the new env var at class-definition time
-        import importlib
+@pytest.mark.parametrize("missing", ["OH_S3_BUCKET", "OH_AWS_REGION"])
+def test_missing_config_fails_before_creating_client(monkeypatch, missing):
+    monkeypatch.setenv("OH_S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("OH_AWS_REGION", "eu-west-3")
+    monkeypatch.delenv(missing)
 
-        import oddsharvester.storage.remote_data_storage as mod
+    with patch("oddsharvester.storage.remote_data_storage.boto3.client") as mock_client:
+        with pytest.raises(ValueError, match=missing):
+            RemoteDataStorage()
 
-        importlib.reload(mod)
-        assert mod.RemoteDataStorage.S3_BUCKET_NAME == "my-custom-bucket"
-
-        # Restore defaults
-        importlib.reload(mod)
+    mock_client.assert_not_called()
 
 
-def test_env_var_override_region():
-    with patch.dict("os.environ", {"OH_AWS_REGION": "us-east-1"}):
-        import importlib
+def test_env_var_override_bucket(monkeypatch):
+    monkeypatch.setenv("OH_S3_BUCKET", "my-custom-bucket")
+    monkeypatch.setenv("OH_AWS_REGION", "eu-west-3")
+    with patch("oddsharvester.storage.remote_data_storage.boto3.client", return_value=MagicMock()):
+        storage = RemoteDataStorage()
 
-        import oddsharvester.storage.remote_data_storage as mod
+    assert storage.S3_BUCKET_NAME == "my-custom-bucket"
 
-        importlib.reload(mod)
-        assert mod.RemoteDataStorage.AWS_REGION == "us-east-1"
 
-        # Restore defaults
-        importlib.reload(mod)
+def test_env_var_override_region(monkeypatch):
+    monkeypatch.setenv("OH_S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("OH_AWS_REGION", "us-east-1")
+    with patch("oddsharvester.storage.remote_data_storage.boto3.client", return_value=MagicMock()):
+        storage = RemoteDataStorage()
+
+    assert storage.AWS_REGION == "us-east-1"
 
 
 def test_save_to_json(remote_data_storage, sample_data):
