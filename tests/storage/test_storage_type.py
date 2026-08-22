@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from oddsharvester.storage.local_data_storage import LocalDataStorage
@@ -18,9 +20,11 @@ def test_storage_type_remote():
     storage_type = StorageType.REMOTE
     assert storage_type.value == "remote"
 
-    storage_instance = storage_type.get_storage_instance()
-    assert storage_instance is not None
-    assert hasattr(storage_instance, "process_and_upload")
+    expected = MagicMock()
+    with patch("oddsharvester.storage.storage_type.RemoteDataStorage", return_value=expected):
+        storage_instance = storage_type.get_storage_instance()
+
+    assert storage_instance is expected
 
 
 def test_storage_type_invalid():
