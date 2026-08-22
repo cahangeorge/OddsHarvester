@@ -50,5 +50,6 @@ jobs:
         with:
           fail_ci_if_error: true
           files: ./coverage.xml
+          slug: cahangeorge/OddsHarvester
           use_oidc: true
           verbose: true
