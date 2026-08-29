@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -199,3 +200,164 @@ async def test_resource_blocking_preserves_har_replay(mock_playwright, monkeypat
     manager = PlaywrightManager()
     await manager.initialize(headless=True)
     mock_playwright["context"].route.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_attempts_all_resources_and_repeated_call_does_not_close_twice(mock_playwright):
+    manager = PlaywrightManager()
+    await manager.initialize(headless=True)
+    first_error = RuntimeError("page close failed")
+    mock_playwright["page"].close.side_effect = first_error
+    mock_playwright["context"].close.side_effect = RuntimeError("context close failed")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await manager.cleanup()
+    with pytest.raises(RuntimeError) as repeated_exc_info:
+        await manager.cleanup()
+
+    assert exc_info.value is first_error
+    assert repeated_exc_info.value is first_error
+    mock_playwright["page"].close.assert_awaited_once()
+    mock_playwright["context"].close.assert_awaited_once()
+    mock_playwright["browser"].close.assert_awaited_once()
+    mock_playwright["playwright"].stop.assert_awaited_once()
+    assert manager.page is None
+    assert manager.context is None
+    assert manager.contexts == {}
+    assert manager.browser is None
+    assert manager.playwright is None
+    assert manager.timezone_id is None
+    assert manager._default_key is None
+    assert manager._proxy_manager is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cleanup_callers_share_error_and_close_resources_once(mock_playwright):
+    manager = PlaywrightManager()
+    await manager.initialize(headless=True)
+    close_started = asyncio.Event()
+    allow_close = asyncio.Event()
+    first_error = RuntimeError("page close failed")
+
+    async def fail_page_close():
+        close_started.set()
+        await allow_close.wait()
+        raise first_error
+
+    mock_playwright["page"].close.side_effect = fail_page_close
+    first_waiter = asyncio.create_task(manager.cleanup())
+    await close_started.wait()
+    second_waiter = asyncio.create_task(manager.cleanup())
+    allow_close.set()
+
+    results = await asyncio.gather(first_waiter, second_waiter, return_exceptions=True)
+
+    assert results[0] is first_error
+    assert results[1] is first_error
+    mock_playwright["page"].close.assert_awaited_once()
+    mock_playwright["context"].close.assert_awaited_once()
+    mock_playwright["browser"].close.assert_awaited_once()
+    mock_playwright["playwright"].stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_initialize_waits_for_running_cleanup_before_new_lifecycle(mock_playwright):
+    manager = PlaywrightManager()
+    await manager.initialize(headless=True)
+    close_started = asyncio.Event()
+    allow_close = asyncio.Event()
+
+    async def delayed_page_close():
+        close_started.set()
+        await allow_close.wait()
+
+    mock_playwright["page"].close.side_effect = delayed_page_close
+    cleanup_waiter = asyncio.create_task(manager.cleanup())
+    await close_started.wait()
+    next_initialize = asyncio.create_task(manager.initialize(headless=True))
+    await asyncio.sleep(0)
+
+    mock_playwright["playwright"].chromium.launch.assert_awaited_once()
+    allow_close.set()
+    await cleanup_waiter
+    await next_initialize
+
+    assert mock_playwright["playwright"].chromium.launch.await_count == 2
+    await manager.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reinitializes_after_cleanup_allocate_one_lifecycle(mock_playwright):
+    manager = PlaywrightManager()
+    await manager.initialize(headless=True)
+    close_started = asyncio.Event()
+    allow_close = asyncio.Event()
+
+    async def delayed_page_close():
+        close_started.set()
+        await allow_close.wait()
+
+    mock_playwright["page"].close.side_effect = delayed_page_close
+    cleanup_waiter = asyncio.create_task(manager.cleanup())
+    await close_started.wait()
+
+    reinitialize_started = asyncio.Event()
+    allow_reinitialize = asyncio.Event()
+
+    async def delayed_browser_launch(**_kwargs):
+        reinitialize_started.set()
+        await allow_reinitialize.wait()
+        return mock_playwright["browser"]
+
+    mock_playwright["playwright"].chromium.launch.side_effect = delayed_browser_launch
+    first_reinitialize = asyncio.create_task(manager.initialize(headless=True))
+    await asyncio.sleep(0)
+    second_reinitialize = asyncio.create_task(manager.initialize(headless=True))
+    await asyncio.sleep(0)
+
+    assert not first_reinitialize.done()
+    assert not second_reinitialize.done()
+    mock_playwright["playwright"].chromium.launch.assert_awaited_once()
+
+    allow_close.set()
+    await cleanup_waiter
+    await reinitialize_started.wait()
+
+    with pytest.raises(RuntimeError, match="initialization is already in progress"):
+        await second_reinitialize
+    assert mock_playwright["playwright"].chromium.launch.await_count == 2
+
+    allow_reinitialize.set()
+    await first_reinitialize
+    await manager.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_cleanup_waiter_does_not_cancel_shared_cleanup(mock_playwright):
+    manager = PlaywrightManager()
+    await manager.initialize(headless=True)
+    close_started = asyncio.Event()
+    allow_close = asyncio.Event()
+    cleanup_error = RuntimeError("page close failed")
+
+    async def fail_page_close():
+        close_started.set()
+        await allow_close.wait()
+        raise cleanup_error
+
+    mock_playwright["page"].close.side_effect = fail_page_close
+    cancelled_waiter = asyncio.create_task(manager.cleanup())
+    await close_started.wait()
+    cancelled_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+
+    allow_close.set()
+    with pytest.raises(RuntimeError) as later_exc_info:
+        await manager.cleanup()
+
+    assert later_exc_info.value is cleanup_error
+    mock_playwright["page"].close.assert_awaited_once()
+    mock_playwright["context"].close.assert_awaited_once()
+    mock_playwright["browser"].close.assert_awaited_once()
+    mock_playwright["playwright"].stop.assert_awaited_once()

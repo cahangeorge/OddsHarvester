@@ -335,7 +335,9 @@ class BaseScraper:
             # page.locator() selectors directly to avoid BeautifulSoup re-parse overhead.
             html_content = await page.content()
             soup = BeautifulSoup(html_content, "lxml")
-            event_rows = soup.find_all(class_=re.compile(OddsPortalSelectors.EVENT_ROW_CLASS_PATTERN))
+            event_rows = list(soup.select("[data-testid='game-row']"))
+            if not event_rows:
+                event_rows = soup.find_all(class_=re.compile(OddsPortalSelectors.EVENT_ROW_CLASS_PATTERN))
             self.logger.info(f"Found {len(event_rows)} event rows.")
 
             tz_name = getattr(self.playwright_manager, "timezone_id", None) if date_filter else None
@@ -356,6 +358,11 @@ class BaseScraper:
 
                 if date_filter is not None:
                     header_el = row.find(attrs={"data-testid": "date-header"})
+                    if header_el is None and row.get("data-testid") == "game-row":
+                        parent = row.parent
+                        while parent is not None and header_el is None:
+                            header_el = parent.find(attrs={"data-testid": "date-header"})
+                            parent = parent.parent
                     if header_el is not None:
                         header_text = header_el.get_text(" ", strip=True)
                         parsed = _parse_date_header(header_text, tz_name=tz_name)
@@ -761,11 +768,13 @@ class BaseScraper:
         try:
             host = soup.find("div", attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_GAME_HOST_TESTID})
             guest = soup.find("div", attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_GAME_GUEST_TESTID})
-            host_p = host.find("p") if host else None
-            guest_p = guest.find("p") if guest else None
-            if not host_p or not guest_p:
+            host_name = host.find(attrs={"data-testid": "participant-name"}) if host else None
+            guest_name = guest.find(attrs={"data-testid": "participant-name"}) if guest else None
+            host_name = host_name or (host.find("p") if host else None)
+            guest_name = guest_name or (guest.find("p") if guest else None)
+            if not host_name or not guest_name:
                 return None, None
-            return host_p.get_text(strip=True), guest_p.get_text(strip=True)
+            return host_name.get_text(strip=True), guest_name.get_text(strip=True)
         except Exception as e:
             self.logger.warning(f"DOM parse failed for teams: {e}")
             return None, None
@@ -786,6 +795,13 @@ class BaseScraper:
             league_link = breadcrumbs.find(
                 "a", attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_BREADCRUMB_LEAGUE_TESTID}
             )
+            if not league_link:
+                candidates = [
+                    link
+                    for link in breadcrumbs.find_all("a", href=True)
+                    if len(link["href"].strip("/").split("/")) >= 3
+                ]
+                league_link = candidates[-1] if candidates else None
             if not league_link:
                 return None
             raw = league_link.get_text(strip=True)
@@ -907,7 +923,7 @@ class BaseScraper:
         for some leagues (see PR #54).
 
         Returns None if neither the JSON nor the DOM yield enough data to
-        identify the match (i.e. the react-event-header div itself is missing).
+        identify the match.
         """
         try:
             try:
@@ -921,20 +937,30 @@ class BaseScraper:
             soup = BeautifulSoup(html_content, "html.parser")
             event_header_div = soup.find("div", id="react-event-header")
 
-            if not event_header_div:
-                self.logger.warning("React event header div not found in page content")
-                return None
+            if not event_header_div and not soup.find(
+                attrs={"data-testid": OddsPortalSelectors.MATCH_DETAILS_GAME_TIME_TESTID}
+            ):
+                try:
+                    await page.wait_for_selector(
+                        f"[data-testid='{OddsPortalSelectors.MATCH_DETAILS_GAME_TIME_TESTID}']",
+                        timeout=SELECTOR_TIMEOUT_MS,
+                    )
+                    soup = BeautifulSoup(await page.content(), "html.parser")
+                except Exception:
+                    self.logger.warning("Current match-detail DOM did not hydrate before the bounded timeout")
 
-            data_attribute = event_header_div.get("data")
-            if not data_attribute:
-                self.logger.warning("React event header div found but 'data' attribute is missing")
-                return None
-
-            try:
-                json_data = json.loads(data_attribute)
-            except (TypeError, json.JSONDecodeError) as e:
-                self.logger.error(f"Failed to parse JSON data from react event header: {e}")
-                return None
+            json_data: dict[str, Any] = {}
+            if event_header_div:
+                data_attribute = event_header_div.get("data")
+                if data_attribute:
+                    try:
+                        json_data = json.loads(data_attribute)
+                    except (TypeError, json.JSONDecodeError) as e:
+                        self.logger.warning(f"Failed to parse React event header JSON; using DOM-only fallback: {e}")
+                else:
+                    self.logger.warning("React event header data is missing; using DOM-only fallback")
+            else:
+                self.logger.info("React event header is absent; using current DOM-only match details")
 
             event_body = json_data.get("eventBody", {})
             event_data = json_data.get("eventData", {})
@@ -1009,6 +1035,10 @@ class BaseScraper:
             partial_results = (
                 dom_partial if dom_partial is not None else clean_html_text(event_body.get("partialresult"))
             )
+
+            if not json_data and (not match_date or not home_team or not away_team or not league_name):
+                self.logger.warning("Match identity is incomplete in both DOM and React event header")
+                return None
 
             # Observability: log which fields came from DOM vs. JSON fallback
             sources = {

@@ -10,6 +10,8 @@ class OddsPortalSelectors:
 
     # Market navigation tabs
     MARKET_TAB_SELECTORS: ClassVar[list[str]] = [
+        "div[data-testid='sports-nav'] button[data-testid='sports-nav-active-tab']",
+        "div[data-testid='sports-nav'] button[data-testid='sports-nav-inactive-tab']",
         "ul.visible-links.bg-black-main.odds-tabs > li",
         "ul.odds-tabs > li",
         "ul[class*='odds-tabs'] > li",
@@ -18,11 +20,16 @@ class OddsPortalSelectors:
         "nav li",
     ]
 
-    # Every market tab (visible + 'More' overflow) carries the `odds-item` class.
-    MARKET_TAB_ITEM_SELECTOR = "li.odds-item"
+    # Current tabs expose stable test ids; ``odds-item`` keeps legacy mirrors.
+    MARKET_TAB_ITEM_SELECTOR = (
+        "div[data-testid='sports-nav'] button[data-testid='sports-nav-active-tab'], "
+        "div[data-testid='sports-nav'] button[data-testid='sports-nav-inactive-tab'], "
+        "li.odds-item"
+    )
 
     # `data-testid='more-button'` is language-independent (text is localized).
     MORE_BUTTON_SELECTORS: ClassVar[list[str]] = [
+        "div[data-testid='sports-nav'] > div > div:has(img[alt='arrow'])",
         "button[data-testid='more-button']",
         "button.toggle-odds:has-text('More')",
         "button[class*='toggle-odds']",
@@ -32,6 +39,11 @@ class OddsPortalSelectors:
         "li[class*='more']",
         "li button:has-text('More')",
         "li a:has-text('More')",
+    ]
+
+    MORE_EXPANDED_SELECTORS: ClassVar[list[str]] = [
+        "div[data-testid='sports-nav'] > div > div:has(img[alt='arrow'].rotate-180)",
+        "button[data-testid='more-button'] .drop-arrow-hide",
     ]
 
     # English main_market -> language-independent market code in the URL fragment
@@ -49,8 +61,26 @@ class OddsPortalSelectors:
         "Draw No Bet": "dnb",
     }
 
+    # The current .com deployment uses compact upper-case fragments while
+    # localized/legacy mirrors still expose the older slug-like codes.
+    MARKET_TAB_CODE_ALIASES: ClassVar[dict[str, set[str]]] = {
+        "1X2": {"1x2"},
+        "Home/Away": {"h/a", "home-away"},
+        "Over/Under": {"o/u", "over-under"},
+        "Asian Handicap": {"ah"},
+        "European Handicap": {"eh"},
+        "Handicap": {"ah"},
+        "Both Teams to Score": {"bts"},
+        "Correct Score": {"cs"},
+        "Double Chance": {"dc", "double"},
+        "Draw No Bet": {"dnb"},
+    }
+
     # Market navigation - sub-market selection
-    SUB_MARKET_SELECTOR = "div.flex.w-full.items-center.justify-start.pl-3.font-bold p"
+    SUB_MARKET_SELECTOR = (
+        "table tbody tr[class*='cursor-pointer'] td:first-child span[class~='max-sm:hidden'], "
+        "div.flex.w-full.items-center.justify-start.pl-3.font-bold p"
+    )
 
     # Bookmaker filter navigation
     BOOKIES_FILTER_CONTAINER = "div[data-testid='bookies-filter-nav']"
@@ -96,6 +126,22 @@ class OddsPortalSelectors:
         if ":" not in fragment:
             return None
         return fragment.split(":", 1)[1].split(";", 1)[0]
+
+    @staticmethod
+    def market_code_matches(market_name: str, url: str) -> bool:
+        observed = OddsPortalSelectors.market_code_from_url(url)
+        if not observed:
+            return False
+        accepted = OddsPortalSelectors.MARKET_TAB_CODE_ALIASES.get(market_name, set())
+        return observed.casefold() in accepted
+
+    @staticmethod
+    def accepted_market_codes(target_code: str) -> set[str]:
+        accepted = {target_code.casefold()}
+        for market_name, legacy_code in OddsPortalSelectors.MARKET_TAB_CODES.items():
+            if legacy_code == target_code:
+                accepted.update(OddsPortalSelectors.MARKET_TAB_CODE_ALIASES.get(market_name, set()))
+        return accepted
 
     @staticmethod
     def period_scope_from_url(url: str) -> int | None:

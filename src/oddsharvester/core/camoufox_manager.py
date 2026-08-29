@@ -28,6 +28,7 @@ class CamoufoxManager(PlaywrightManager):
         try:
             from camoufox.addons import DefaultAddons
             from camoufox.async_api import AsyncCamoufox
+            from camoufox.exceptions import CamoufoxNotInstalled
         except ImportError as exc:  # Optional dependency; never import during ordinary test collection.
             raise CamoufoxUnavailableError("Camoufox is not installed; install oddsharvester[camoufox]") from exc
 
@@ -35,21 +36,15 @@ class CamoufoxManager(PlaywrightManager):
             self.timezone_id = timezone_id
             self._proxy_manager = proxy_manager
             healthy_entries = (
-                [entry for entry in proxy_manager.entries if not entry.blacklisted]
-                if proxy_manager
-                else []
+                [entry for entry in proxy_manager.entries if not entry.blacklisted] if proxy_manager else []
             )
             if proxy_manager and not healthy_entries:
-                raise AllProxiesExhaustedError(
-                    "All proxies are blacklisted; cannot initialize Camoufox."
-                )
+                raise AllProxiesExhaustedError("All proxies are blacklisted; cannot initialize Camoufox.")
             # Camoufox cannot use PlaywrightManager's synthetic "per-context"
             # launch proxy. In multi-proxy mode launch directly, then bind each
             # real proxy to its own browser context.
             launch_proxy = (
-                proxy_manager.launch_proxy()
-                if proxy_manager and not proxy_manager.is_multi_proxy()
-                else None
+                proxy_manager.launch_proxy() if proxy_manager and not proxy_manager.is_multi_proxy() else None
             )
             camoufox = AsyncCamoufox(
                 headless=headless,
@@ -77,6 +72,9 @@ class CamoufoxManager(PlaywrightManager):
             self.page = await self.context.new_page()
             if self.timezone_id is None:
                 self.timezone_id = await self.page.evaluate("() => Intl.DateTimeFormat().resolvedOptions().timeZone")
+        except CamoufoxNotInstalled as exc:
+            await self.cleanup()
+            raise CamoufoxUnavailableError("Camoufox browser assets are not installed") from exc
         except Exception:
             await self.cleanup()
             raise

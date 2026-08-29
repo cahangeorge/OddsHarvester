@@ -7,7 +7,7 @@ import pytest
 from oddsharvester.core.odds_portal_market_extractor import OddsPortalMarketExtractor
 from oddsharvester.core.odds_portal_scraper import LinkCollectionResult, OddsPortalScraper
 from oddsharvester.core.playwright_manager import PlaywrightManager
-from oddsharvester.core.scrape_result import ScrapeResult, ScrapeStats
+from oddsharvester.core.scrape_result import ErrorType, FailedUrl, PartialResult, ScrapeResult, ScrapeStats
 from oddsharvester.utils.constants import GOTO_TIMEOUT_LONG_MS, MAX_PAGINATION_PAGES
 from oddsharvester.utils.proxy_manager import ProxyManager
 
@@ -30,6 +30,7 @@ def setup_scraper_mocks():
     playwright_manager_mock.page = page_mock
     playwright_manager_mock.context = context_mock
     playwright_manager_mock.browser = browser_mock
+    playwright_manager_mock.timezone_id = None
 
     cookie_dismisser_mock = AsyncMock()
 
@@ -193,7 +194,10 @@ async def test_scrape_upcoming(url_builder_mock, setup_scraper_mocks):
 
     # Mock extract_match_odds to return ScrapeResult
     mock_scrape_result = ScrapeResult(
-        success=[{"match": "data1"}, {"match": "data2"}],
+        success=[
+            {"match": "data1", "match_date": "2026-06-01 12:00:00 UTC"},
+            {"match": "data2", "match_date": "2026-06-01 15:00:00 UTC"},
+        ],
         failed=[],
         partial=[],
         stats=ScrapeStats(total_urls=2, successful=2, failed=0, partial=0),
@@ -236,6 +240,206 @@ async def test_scrape_upcoming(url_builder_mock, setup_scraper_mocks):
     assert isinstance(result, ScrapeResult)
     assert len(result.success) == 2
     assert result.stats.successful == 2
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.odds_portal_scraper.URLBuilder")
+async def test_scrape_upcoming_league_only_without_date(url_builder_mock, setup_scraper_mocks):
+    scraper = setup_scraper_mocks["scraper"]
+    url_builder_mock.get_upcoming_matches_url.return_value = "https://oddsportal.com/football/denmark/superliga"
+    scraper._prepare_page_for_scraping = AsyncMock()
+    scraper.extract_match_links = AsyncMock(return_value=["match"])
+    extracted = ScrapeResult(
+        success=[{"match": "unfiltered"}],
+        stats=ScrapeStats(total_urls=1, successful=1),
+    )
+    scraper.extract_match_odds = AsyncMock(return_value=extracted)
+
+    result = await scraper.scrape_upcoming(sport="football", date=None, league="denmark-superliga")
+
+    assert result is extracted
+    assert result.success == [{"match": "unfiltered"}]
+    scraper.extract_match_links.assert_awaited_once_with(
+        page=setup_scraper_mocks["page_mock"], date_filter=None, skip_started=True
+    )
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.odds_portal_scraper.URLBuilder")
+async def test_scrape_upcoming_filters_extracted_records_to_requested_date(url_builder_mock, setup_scraper_mocks):
+    mocks = setup_scraper_mocks
+    scraper = mocks["scraper"]
+    mocks["playwright_manager_mock"].timezone_id = "Europe/Bucharest"
+    url_builder_mock.get_upcoming_matches_url.return_value = "https://oddsportal.com/football/denmark/superliga"
+    scraper._prepare_page_for_scraping = AsyncMock()
+    scraper.extract_match_links = AsyncMock(return_value=["aug-23", "aug-30"])
+    scraper.extract_match_odds = AsyncMock(
+        return_value=ScrapeResult(
+            success=[
+                {
+                    "match": "requested",
+                    "match_link": "https://oddsportal.com/requested",
+                    "match_date": "2026-08-23 13:00:00 UTC",
+                },
+                {
+                    "match": "wrong-week",
+                    "match_link": "https://oddsportal.com/wrong-week",
+                    "match_date": "2026-08-30 13:00:00 UTC",
+                },
+            ],
+            stats=ScrapeStats(total_urls=2, successful=2),
+        )
+    )
+
+    result = await scraper.scrape_upcoming(
+        sport="football", date="20260823", league="denmark-superliga", markets=["1x2"]
+    )
+
+    assert [record["match"] for record in result.success] == ["requested"]
+    assert result.metadata["date_scope_out_of_scope_removed"] == 1
+    assert result.metadata["date_scope_invalid_date_removed"] == 0
+    assert len(result.failed) == 1
+    assert result.failed[0].url == "https://oddsportal.com/wrong-week"
+    assert result.failed[0].is_retryable is False
+    assert result.stats == ScrapeStats(total_urls=2, successful=1, failed=1)
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.odds_portal_scraper.URLBuilder")
+async def test_scrape_upcoming_uses_browser_timezone_for_extracted_date(url_builder_mock, setup_scraper_mocks):
+    mocks = setup_scraper_mocks
+    scraper = mocks["scraper"]
+    mocks["playwright_manager_mock"].timezone_id = "Europe/Bucharest"
+    url_builder_mock.get_upcoming_matches_url.return_value = "https://oddsportal.com/football/matches/20260823"
+    scraper._prepare_page_for_scraping = AsyncMock()
+    scraper.extract_match_links = AsyncMock(return_value=["zulu", "offset"])
+    scraper.extract_match_odds = AsyncMock(
+        return_value=ScrapeResult(
+            success=[
+                {"match": "zulu", "match_date": "2026-08-22T22:30:00Z"},
+                {"match": "offset", "match_date": "2026-08-23T00:30:00+03:00"},
+            ],
+            stats=ScrapeStats(total_urls=2, successful=2),
+        )
+    )
+
+    result = await scraper.scrape_upcoming(sport="football", date="20260823")
+
+    assert [record["match"] for record in result.success] == ["zulu", "offset"]
+    assert result.stats == ScrapeStats(total_urls=2, successful=2)
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.odds_portal_scraper.URLBuilder")
+async def test_scrape_upcoming_filters_invalid_and_partial_dates(url_builder_mock, setup_scraper_mocks, caplog):
+    mocks = setup_scraper_mocks
+    scraper = mocks["scraper"]
+    mocks["playwright_manager_mock"].timezone_id = "UTC"
+    url_builder_mock.get_upcoming_matches_url.return_value = "https://oddsportal.com/football/matches/20260823"
+    scraper._prepare_page_for_scraping = AsyncMock()
+    scraper.extract_match_links = AsyncMock(return_value=["missing", "invalid", "partial", "wrong", "failed"])
+    failed = FailedUrl(url="failed", error_type=ErrorType.PARSING, error_message="broken")
+    scraper.extract_match_odds = AsyncMock(
+        return_value=ScrapeResult(
+            success=[
+                {"match": "missing", "match_link": "https://oddsportal.com/missing"},
+                {
+                    "match": "invalid",
+                    "match_link": "https://oddsportal.com/invalid",
+                    "match_date": "not-a-date",
+                },
+            ],
+            partial=[
+                PartialResult(url="partial", data={"match_date": "2026-08-23 12:00:00 UTC"}),
+                PartialResult(url="wrong", data={"match_date": "2026-08-30 12:00:00 UTC"}),
+            ],
+            failed=[failed],
+            stats=ScrapeStats(total_urls=99, successful=99, failed=99, partial=99),
+            metadata={"diagnostic": "preserved"},
+        )
+    )
+
+    result = await scraper.scrape_upcoming(sport="football", date="20260823")
+
+    assert result.success == []
+    assert [partial.url for partial in result.partial] == ["partial"]
+    assert [item.url for item in result.failed] == [
+        "failed",
+        "https://oddsportal.com/missing",
+        "https://oddsportal.com/invalid",
+        "wrong",
+    ]
+    assert all(not item.is_retryable for item in result.failed[1:])
+    assert result.stats == ScrapeStats(total_urls=5, failed=4, partial=1)
+    assert result.metadata == {
+        "diagnostic": "preserved",
+        "date_scope_out_of_scope_removed": 1,
+        "date_scope_invalid_date_removed": 2,
+    }
+    assert "outside requested local date" in caplog.text
+    assert "missing or invalid match_date" in caplog.text
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.odds_portal_scraper.URLBuilder")
+async def test_scrape_upcoming_filtered_empty_result_is_a_visible_failure(url_builder_mock, setup_scraper_mocks):
+    mocks = setup_scraper_mocks
+    scraper = mocks["scraper"]
+    url_builder_mock.get_upcoming_matches_url.return_value = "https://oddsportal.com/football/matches/20260823"
+    scraper._prepare_page_for_scraping = AsyncMock()
+    scraper.extract_match_links = AsyncMock(return_value=["wrong"])
+    scraper.extract_match_odds = AsyncMock(
+        return_value=ScrapeResult(
+            success=[
+                {
+                    "match_link": "https://oddsportal.com/wrong",
+                    "match_date": "2026-08-30 12:00:00 UTC",
+                }
+            ],
+            stats=ScrapeStats(total_urls=1, successful=1),
+        )
+    )
+
+    result = await scraper.scrape_upcoming(sport="football", date="20260823")
+
+    assert result.success == []
+    assert result.partial == []
+    assert len(result.failed) == 1
+    assert result.failed[0].url == "https://oddsportal.com/wrong"
+    assert result.failed[0].is_retryable is False
+    assert result.stats == ScrapeStats(total_urls=1, failed=1)
+    assert result.metadata == {
+        "date_scope_out_of_scope_removed": 1,
+        "date_scope_invalid_date_removed": 0,
+    }
+    assert not result.is_truthful_no_fixtures()
+
+
+@pytest.mark.asyncio
+@patch("oddsharvester.core.odds_portal_scraper.URLBuilder")
+async def test_scrape_upcoming_invalid_dates_do_not_attest_no_fixtures(url_builder_mock, setup_scraper_mocks):
+    mocks = setup_scraper_mocks
+    scraper = mocks["scraper"]
+    url_builder_mock.get_upcoming_matches_url.return_value = "https://oddsportal.com/football/matches/20260823"
+    scraper._prepare_page_for_scraping = AsyncMock()
+    scraper.extract_match_links = AsyncMock(return_value=["invalid"])
+    scraper.extract_match_odds = AsyncMock(
+        return_value=ScrapeResult(
+            success=[{"match_link": "https://oddsportal.com/invalid", "match_date": "not-a-date"}],
+            stats=ScrapeStats(total_urls=1, successful=1),
+        )
+    )
+
+    result = await scraper.scrape_upcoming(sport="football", date="20260823")
+
+    assert result.success == []
+    assert len(result.failed) == 1
+    assert result.failed[0].url == "https://oddsportal.com/invalid"
+    assert result.failed[0].is_retryable is False
+    assert result.stats == ScrapeStats(total_urls=1, failed=1)
+    assert result.metadata["date_scope_invalid_date_removed"] == 1
+    assert "discovery_outcome" not in result.metadata
+    assert not result.is_truthful_no_fixtures()
 
 
 @pytest.mark.asyncio

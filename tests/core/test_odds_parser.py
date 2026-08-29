@@ -6,6 +6,33 @@ from oddsharvester.core.market_extraction.odds_parser import OddsParser, parse_o
 
 
 class TestOddsParser:
+    def test_parse_current_semantic_bookmaker_table(self, odds_parser):
+        html = """
+        <table>
+          <tr><th>Bookmaker</th><th>1</th><th>X</th><th>2</th></tr>
+          <tr class="h-9">
+            <td><p data-testid="outrights-expanded-bookmaker-name">Betano.ro</p></td>
+            <td><div data-testid="odd-container">3.20</div></td>
+            <td><div data-testid="odd-container">4.05</div></td>
+            <td><div data-testid="odd-container">2.05</div></td>
+            <td><div data-testid="payout-container">95.5%</div></td>
+          </tr>
+        </table>
+        <div data-testid="game-row"><p data-testid="odd-container-default">9.99</p></div>
+        """
+
+        result = odds_parser.parse_market_odds(html, "FullTime", ["1", "X", "2"])
+
+        assert result == [
+            {
+                "1": "3.20",
+                "X": "4.05",
+                "2": "2.05",
+                "bookmaker_name": "Betano.ro",
+                "period": "FullTime",
+            }
+        ]
+
     """Unit tests for the OddsParser class."""
 
     @pytest.fixture

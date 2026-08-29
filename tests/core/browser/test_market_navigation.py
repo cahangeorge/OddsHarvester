@@ -160,19 +160,18 @@ class TestMarketTabNavigator:
     @pytest.mark.asyncio
     async def test_open_more_dropdown_already_expanded(self, navigator, mock_page):
         """_open_more_dropdown does not re-click when already expanded."""
-        more_button = AsyncMock()
-        # First query: the button; second query: the expanded-arrow marker.
-        mock_page.query_selector = AsyncMock(side_effect=[more_button, AsyncMock()])
+        expanded_marker = AsyncMock()
+        mock_page.query_selector = AsyncMock(return_value=expanded_marker)
         result = await navigator._open_more_dropdown(mock_page)
         assert result is True
-        more_button.click.assert_not_called()
+        expanded_marker.click.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_open_more_dropdown_collapsed_clicks(self, navigator, mock_page):
         """_open_more_dropdown clicks the button when collapsed."""
         more_button = AsyncMock()
-        # First query: the button; second query: no expanded-arrow marker.
-        mock_page.query_selector = AsyncMock(side_effect=[more_button, None])
+        # Two expanded-state probes miss, then the current structural control is found.
+        mock_page.query_selector = AsyncMock(side_effect=[None, None, more_button])
         mock_page.wait_for_timeout = AsyncMock()
         result = await navigator._open_more_dropdown(mock_page)
         assert result is True
@@ -389,14 +388,14 @@ class TestMarketTabNavigator:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_verify_tab_is_active_content_fallback(self, navigator, mock_page):
-        """Test tab verification using content fallback."""
-        # Mock no active element but market name in content
+    async def test_verify_tab_does_not_accept_hidden_page_content(self, navigator, mock_page):
+        """Hidden overflow labels in page HTML must not produce a false active result."""
         mock_page.query_selector.return_value = None
         mock_page.content = AsyncMock(return_value="<html><body>Draw No Bet content</body></html>")
 
         result = await navigator._verify_tab_is_active(mock_page, "Draw No Bet")
-        assert result is True
+        assert result is False
+        mock_page.content.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_verify_tab_is_active_exception_handling(self, navigator, mock_page):

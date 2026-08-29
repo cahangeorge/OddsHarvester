@@ -250,6 +250,41 @@ _LISTING_HTML = """
 </body></html>
 """
 
+_CURRENT_LISTING_HTML = """
+<html><body>
+<div class="flex flex-col">
+  <div data-testid="secondary-header"><div data-testid="date-header">22 Aug 2026</div></div>
+  <div class="flex flex-col">
+    <div data-testid="game-row">
+      <div data-testid="time-item"><p>20:00</p></div>
+      <a href="/football/h2h/team-a/team-b/#match-one">match one</a>
+    </div>
+  </div>
+</div>
+<div class="flex flex-col">
+  <div data-testid="secondary-header"><div data-testid="date-header">23 Aug 2026</div></div>
+  <div class="flex flex-col">
+    <div data-testid="game-row">
+      <div data-testid="time-item"><p>19:00</p></div>
+      <a href="/football/h2h/team-c/team-d/#match-two">match two</a>
+    </div>
+  </div>
+</div>
+</body></html>
+"""
+
+
+@pytest.mark.asyncio
+async def test_extract_match_links_supports_current_game_rows_and_sibling_date_headers(setup_base_scraper_mocks):
+    mocks = setup_base_scraper_mocks
+    scraper = mocks["scraper"]
+    page_mock = mocks["page_mock"]
+    page_mock.content = AsyncMock(return_value=_CURRENT_LISTING_HTML)
+
+    result = await scraper.extract_match_links(page=page_mock, date_filter=date(2026, 8, 23), skip_started=True)
+
+    assert result == [f"{ODDSPORTAL_BASE_URL}/football/h2h/team-c/team-d/#match-two"]
+
 
 @pytest.mark.asyncio
 async def test_extract_match_links_skips_started_rows_when_requested(setup_base_scraper_mocks):
@@ -1072,7 +1107,34 @@ async def test_extract_match_details_match_info_skips_nameless_and_empty(setup_b
 
 @pytest.mark.asyncio
 async def test_extract_match_details_missing_div(setup_base_scraper_mocks):
-    """When the react-event-header div is absent, return None."""
+    """Current match pages can identify the match entirely from stable DOM landmarks."""
+    mocks = setup_base_scraper_mocks
+    scraper = mocks["scraper"]
+    page_mock = mocks["page_mock"]
+    page_mock.content = AsyncMock(
+        return_value="""
+        <html><body>
+          <div data-testid="breadcrumbs-line">
+            <a data-testid="Superliga" href="/football/denmark/superliga/">Superliga</a>
+          </div>
+          <div data-testid="game-host"><a data-testid="participant-name">Sonderjyske</a></div>
+          <div data-testid="game-guest"><a data-testid="participant-name">Nordsjaelland</a></div>
+          <div data-testid="game-time-item"><p>Sunday</p><p>23 Aug 2026,</p><p>13:00</p></div>
+        </body></html>
+        """
+    )
+
+    result = await scraper._extract_match_details_event_header(
+        page=page_mock, match_link="https://www.oddsportal.com/football/england/test-match"
+    )
+    assert result["home_team"] == "Sonderjyske"
+    assert result["away_team"] == "Nordsjaelland"
+    assert result["league_name"] == "Superliga"
+    assert result["match_date"] == "2026-08-23 13:00:00 UTC"
+
+
+@pytest.mark.asyncio
+async def test_extract_match_details_missing_div_and_dom_identity_returns_none(setup_base_scraper_mocks):
     mocks = setup_base_scraper_mocks
     scraper = mocks["scraper"]
     page_mock = mocks["page_mock"]
@@ -1081,6 +1143,7 @@ async def test_extract_match_details_missing_div(setup_base_scraper_mocks):
     result = await scraper._extract_match_details_event_header(
         page=page_mock, match_link="https://www.oddsportal.com/football/england/test-match"
     )
+
     assert result is None
 
 

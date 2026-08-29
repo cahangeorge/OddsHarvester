@@ -87,9 +87,7 @@ def test_extract_page_bootstrap_and_user_data():
     user_data = {"bookiehash": "Xabc123", "geo": "RO", "locale": "en"}
     encoded = json.dumps(json.dumps(user_data))
 
-    assert request_url == (
-        "https://www.oddsportal.com/ajax-sport-country-tournament-archive_/1/LeagueId/"
-    )
+    assert request_url == ("https://www.oddsportal.com/ajax-sport-country-tournament-archive_/1/LeagueId/")
     assert user_data_url == "https://www.oddsportal.com/ajax-user-data/t/token/"
     assert parse_user_data_script(f"window.user = JSON.parse({encoded});") == user_data
 
@@ -180,16 +178,39 @@ def _event_payload() -> dict:
 def test_event_and_market_urls_are_bound_to_trusted_event():
     match_link = "https://www.oddsportal.com/football/h2h/austria/argentina/#Abc123"
 
-    assert event_data_url(match_link) == (
-        "https://www.oddsportal.com/football/h2h/austria/argentina/?eventId=Abc123"
+    assert event_data_url(match_link) == ("https://www.oddsportal.com/football/h2h/austria/argentina/?eventId=Abc123")
+    assert (
+        build_market_xhr_url(
+            _event_payload(),
+            market="over_under_2_5",
+            geo="AT",
+            locale="de-AT",
+        )
+        == "https://www.oddsportal.com/match-event/1-1-Abc123-2-2-hash123.dat?geo=AT&lang=de-AT"
     )
-    assert build_market_xhr_url(
-        _event_payload(),
-        market="over_under_2_5",
-        geo="AT",
-        locale="de-AT",
-    ) == "https://www.oddsportal.com/match-event/1-1-Abc123-2-2-hash123.dat?geo=AT&lang=de-AT"
     assert match_record_from_event_payload(_event_payload(), match_link=match_link)["home_team"] == "Austria"
+
+
+@pytest.mark.parametrize(
+    ("market", "betting_type_id"),
+    [
+        ("1x2", 1),
+        ("over_under_1_5", 2),
+        ("over_under_2_5", 2),
+        ("over_under_3_5", 2),
+        ("double_chance", 4),
+        ("asian_handicap_-0_5", 5),
+        ("dnb", 6),
+        ("btts", 13),
+    ],
+)
+def test_build_market_xhr_url_supports_every_analysis_market(market, betting_type_id):
+    payload = _event_payload()
+    payload["d"]["sportData"]["eventData"]["requestBasePreMatch"] = "/proxy/match-event/"
+
+    assert build_market_xhr_url(payload, market=market) == (
+        f"https://www.oddsportal.com/proxy/match-event/1-1-Abc123-{betting_type_id}-2-hash123.dat?geo=RO&lang=en"
+    )
 
 
 def test_event_url_rejects_untrusted_host():
@@ -209,9 +230,7 @@ def test_static_event_bootstrap_is_accepted_only_for_requested_event():
     data["requestBasePreMatch"] = "/match-event/"
     html = f"<div id='react-event-header' data='{json.dumps(data)}'></div>"
 
-    assert event_payload_from_static_html(html, match_link=match_link)["d"]["sportData"]["eventData"][
-        "id"
-    ] == "Abc123"
+    assert event_payload_from_static_html(html, match_link=match_link)["d"]["sportData"]["eventData"]["id"] == "Abc123"
     with pytest.raises(OddsPortalXHRSchemaError, match="different event"):
         event_payload_from_static_html(
             html,
@@ -281,12 +300,57 @@ def test_provider_mapping_and_market_parity():
             "2": "4.00",
         }
     ]
-    assert market_rows_from_payload(
-        payloads["over_under_2_5"], market="over_under_2_5", provider_names=providers
-    )[0]["odds_under"] == "2.02"
-    assert market_rows_from_payload(payloads["btts"], market="btts", provider_names=providers)[0][
-        "btts_yes"
-    ] == "1.80"
+    assert (
+        market_rows_from_payload(payloads["over_under_2_5"], market="over_under_2_5", provider_names=providers)[0][
+            "odds_under"
+        ]
+        == "2.02"
+    )
+    assert market_rows_from_payload(payloads["btts"], market="btts", provider_names=providers)[0]["btts_yes"] == "1.80"
+
+
+@pytest.mark.parametrize(
+    ("market", "betting_type_id", "handicap", "values", "expected"),
+    [
+        ("double_chance", 4, 0, {"1": 1.97, "0": 1.29, "2": 1.25}, {"1X": "1.29", "12": "1.97", "X2": "1.25"}),
+        ("dnb", 6, 0, [3.05, 1.38], {"dnb_team1": "3.05", "dnb_team2": "1.38"}),
+        ("over_under_1_5", 2, "1.50", [1.23, 4.3], {"odds_over": "1.23", "odds_under": "4.30"}),
+        ("over_under_3_5", 2, "3.50", [2.75, 1.46], {"odds_over": "2.75", "odds_under": "1.46"}),
+        (
+            "asian_handicap_-0_5",
+            5,
+            "-0.50",
+            {"1": 1.36, "0": 2.9},
+            {"team1_handicap": "2.90", "team2_handicap": "1.36"},
+        ),
+    ],
+)
+def test_market_rows_cover_every_extended_analysis_market(market, betting_type_id, handicap, values, expected):
+    payload = {
+        "d": {
+            "oddsdata": {
+                "back": {
+                    "requested": {
+                        "bettingTypeId": betting_type_id,
+                        "scopeId": 2,
+                        "handicapValue": handicap,
+                        "odds": {"14": values},
+                        "act": {"14": True},
+                    },
+                    "other-line": {
+                        "bettingTypeId": betting_type_id,
+                        "scopeId": 2,
+                        "handicapValue": "9.50",
+                        "odds": {"14": [9.9, 9.8]},
+                        "act": {"14": True},
+                    },
+                }
+            }
+        }
+    }
+
+    row = market_rows_from_payload(payload, market=market, provider_names={"14": "Pinnacle"})[0]
+    assert {key: row[key] for key in expected} == expected
 
 
 def test_market_rows_reject_non_full_time_scope_and_invalid_decimal_odds():

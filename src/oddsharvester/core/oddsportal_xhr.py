@@ -32,15 +32,30 @@ _PBKDF2_ITERATIONS = 1_000
 
 MARKET_BETTING_TYPE_IDS = {
     "1x2": 1,
+    "double_chance": 4,
+    "asian_handicap_-0_5": 5,
+    "dnb": 6,
+    "over_under_1_5": 2,
     "over_under_2_5": 2,
+    "over_under_3_5": 2,
     "btts": 13,
 }
 MARKET_OUTCOME_LABELS = {
     "1x2": ("1", "X", "2"),
+    "double_chance": ("1X", "12", "X2"),
+    "asian_handicap_-0_5": ("team1_handicap", "team2_handicap"),
+    "dnb": ("dnb_team1", "dnb_team2"),
+    "over_under_1_5": ("odds_over", "odds_under"),
     "over_under_2_5": ("odds_over", "odds_under"),
+    "over_under_3_5": ("odds_over", "odds_under"),
     "btts": ("btts_yes", "btts_no"),
 }
-MARKET_HANDICAPS = {"over_under_2_5": "2.50"}
+MARKET_HANDICAPS = {
+    "asian_handicap_-0_5": "-0.50",
+    "over_under_1_5": "1.50",
+    "over_under_2_5": "2.50",
+    "over_under_3_5": "3.50",
+}
 
 _JSON_PARSE_ARGUMENT = re.compile(r"""JSON\.parse\(("(?:\\.|[^"\\])*")\)""")
 
@@ -82,9 +97,7 @@ def decode_xhr_payload(payload: str | bytes) -> dict[str, Any]:
         unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
         decoded = unpadder.update(padded) + unpadder.finalize()
     except ValueError as exc:
-        raise OddsPortalXHRDecodeError(
-            f"OddsPortal XHR decryption failed for decoder {DECODER_REVISION}"
-        ) from exc
+        raise OddsPortalXHRDecodeError(f"OddsPortal XHR decryption failed for decoder {DECODER_REVISION}") from exc
 
     if decoded.startswith(b"\x1f\x8b"):
         decoded = _bounded_gzip_decompress(decoded)
@@ -131,10 +144,9 @@ def extract_page_bootstrap(html: str, *, page_url: str) -> tuple[str, str]:
     joined_user_data_url = urljoin(page_url, user_data_script)
     if not _is_trusted_oddsportal_url(urlsplit(joined_request_url)):
         raise OddsPortalXHRSchemaError("OddsPortal listing request host is not trusted")
-    if (
-        not _is_trusted_oddsportal_url(urlsplit(joined_user_data_url))
-        or not urlsplit(joined_user_data_url).path.startswith("/ajax-user-data/")
-    ):
+    if not _is_trusted_oddsportal_url(urlsplit(joined_user_data_url)) or not urlsplit(
+        joined_user_data_url
+    ).path.startswith("/ajax-user-data/"):
         raise OddsPortalXHRSchemaError("OddsPortal user-data script host is not trusted")
     return joined_request_url, joined_user_data_url
 
@@ -254,7 +266,7 @@ def build_market_xhr_url(
     event_hash = unquote(str(event_data.get("xhash") or ""))
     if (
         not isinstance(request_base, str)
-        or not request_base.startswith("/match-event/")
+        or request_base not in {"/match-event/", "/proxy/match-event/"}
         or not isinstance(event_id, str)
         or not isinstance(version_id, int)
         or not isinstance(sport_id, int)
@@ -371,9 +383,7 @@ def market_rows_from_payload(
             continue
         bookmaker_name = provider_names.get(provider_key)
         if bookmaker_name is None:
-            raise OddsPortalXHRSchemaError(
-                f"OddsPortal provider catalog does not contain provider ID {provider_key}"
-            )
+            raise OddsPortalXHRSchemaError(f"OddsPortal provider catalog does not contain provider ID {provider_key}")
         if target_bookmaker and bookmaker_name.casefold() != target_bookmaker.casefold():
             continue
         normalized_values = _outcome_values(values, labels)

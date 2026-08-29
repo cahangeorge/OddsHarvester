@@ -1,12 +1,12 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, date, datetime
 from enum import Enum
 import random
 
 from playwright.async_api import Page
 
 from oddsharvester.core.base_scraper import BaseScraper
-from oddsharvester.core.scrape_result import ScrapeResult
+from oddsharvester.core.scrape_result import ErrorType, FailedUrl, ScrapeResult, ScrapeStats
 from oddsharvester.core.url_builder import URLBuilder
 from oddsharvester.utils.bookies_filter_enum import BookiesFilter
 from oddsharvester.utils.constants import (
@@ -135,7 +135,7 @@ class OddsPortalScraper(BaseScraper):
     async def scrape_upcoming(
         self,
         sport: str,
-        date: str,
+        date: str | None,
         league: str | None = None,
         markets: list[str] | None = None,
         scrape_odds_history: bool = False,
@@ -151,7 +151,7 @@ class OddsPortalScraper(BaseScraper):
 
         Args:
             sport (str): The sport to scrape.
-            date (str): The date to scrape.
+            date (str | None): The date to scrape. May be omitted for a league-only scrape.
             league (Optional[str]): The league to scrape.
             markets (Optional[List[str]]): List of markets.
             scrape_odds_history (bool): Whether to scrape and attach odds history.
@@ -180,18 +180,21 @@ class OddsPortalScraper(BaseScraper):
             timeout=30,
             scroll_pause_time=2,
             max_scroll_attempts=3,
-            content_check_selector="div[class*='eventRow']",
+            content_check_selector="[data-testid='game-row'], div[class*='eventRow']",
         )
 
         # League page shows all upcoming dates; when a specific date is requested,
         # post-filter links by the date-header rendered above each row group.
-        date_filter = None
-        if league and date:
+        requested_date = None
+        if date:
             try:
-                date_filter = datetime.strptime(date, "%Y%m%d").date()
-                self.logger.info(f"Applying date filter for league page: {date_filter.isoformat()}")
+                requested_date = datetime.strptime(date, "%Y%m%d").date()
             except ValueError:
                 self.logger.warning(f"Could not parse date '{date}' for filtering; returning all league matches.")
+
+        date_filter = requested_date if league else None
+        if date_filter:
+            self.logger.info(f"Applying date filter for league page: {date_filter.isoformat()}")
 
         match_links = await self.extract_match_links(
             page=current_page,
@@ -203,7 +206,7 @@ class OddsPortalScraper(BaseScraper):
             self.logger.warning("No match links found for upcoming matches.")
             return ScrapeResult(metadata={"discovery_outcome": "no_fixtures"})
 
-        return await self.extract_match_odds(
+        result = await self.extract_match_odds(
             sport=sport,
             match_links=match_links,
             markets=markets,
@@ -215,6 +218,78 @@ class OddsPortalScraper(BaseScraper):
             period=period,
             request_delay=request_delay,
         )
+        return self._filter_upcoming_date_scope(result, requested_date) if requested_date else result
+
+    @staticmethod
+    def _parse_upcoming_match_date(value: object) -> datetime | None:
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        try:
+            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=UTC)
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.fromisoformat(f"{value[:-1]}+00:00" if value.endswith("Z") else value)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else None
+
+    def _filter_upcoming_date_scope(self, result: ScrapeResult, requested_date: date) -> ScrapeResult:
+        timezone = self._resolved_browser_timezone()
+        out_of_scope = 0
+        invalid_date = 0
+
+        def is_in_scope(record: dict, fallback_url: str) -> bool:
+            nonlocal out_of_scope, invalid_date
+            match_date = self._parse_upcoming_match_date(record.get("match_date"))
+            url = record.get("match_link") or record.get("url") or fallback_url
+            if match_date is None:
+                invalid_date += 1
+                message = "Missing or invalid match_date for requested-date validation"
+            elif match_date.astimezone(timezone).date() != requested_date:
+                out_of_scope += 1
+                message = f"Match is outside requested local date {requested_date.isoformat()}"
+            else:
+                return True
+            result.failed.append(
+                FailedUrl(
+                    url=str(url),
+                    error_type=ErrorType.PARSING,
+                    error_message=message,
+                    is_retryable=False,
+                )
+            )
+            return False
+
+        result.success = [
+            record
+            for index, record in enumerate(result.success, 1)
+            if is_in_scope(record, f"date-scope-success-{index}")
+        ]
+        result.partial = [
+            partial
+            for index, partial in enumerate(result.partial, 1)
+            if is_in_scope(partial.data, partial.url or f"date-scope-partial-{index}")
+        ]
+        result.stats = ScrapeStats(
+            total_urls=len(result.success) + len(result.partial) + len(result.failed),
+            successful=len(result.success),
+            failed=len(result.failed),
+            partial=len(result.partial),
+        )
+        result.metadata["date_scope_out_of_scope_removed"] = out_of_scope
+        result.metadata["date_scope_invalid_date_removed"] = invalid_date
+        result.metadata.pop("discovery_outcome", None)
+
+        if out_of_scope:
+            self.logger.warning(
+                f"Date-scope guard removed {out_of_scope} records outside requested local date {requested_date}"
+            )
+        if invalid_date:
+            self.logger.warning(f"Date-scope guard removed {invalid_date} records with missing or invalid match_date")
+
+        return result
 
     async def scrape_matches(
         self,
