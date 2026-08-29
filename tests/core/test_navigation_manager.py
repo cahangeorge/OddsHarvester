@@ -6,6 +6,7 @@ import pytest
 from oddsharvester.core.browser.market_navigation import MarketTabNavigator
 from oddsharvester.core.browser.scrolling import PageScroller
 from oddsharvester.core.market_extraction.navigation_manager import NavigationManager
+from oddsharvester.core.odds_portal_selectors import OddsPortalSelectors
 from oddsharvester.utils.constants import DEFAULT_MARKET_TIMEOUT_MS, MARKET_SWITCH_WAIT_TIME_MS, SCROLL_PAUSE_TIME_MS
 
 
@@ -80,9 +81,7 @@ class TestNavigationManager:
         page_mock.wait_for_timeout.assert_called_with(MARKET_SWITCH_WAIT_TIME_MS)
 
     @pytest.mark.asyncio
-    async def test_v2_market_switch_returns_immediately_when_url_code_is_active(
-        self, navigation_manager, page_mock
-    ):
+    async def test_v2_market_switch_returns_immediately_when_url_code_is_active(self, navigation_manager, page_mock):
         navigation_manager.fast_ready_waits = True
 
         result = await navigation_manager.wait_for_market_switch(
@@ -167,7 +166,7 @@ class TestNavigationManager:
         assert result is True
         scroller_mock.scroll_until_visible_and_click_parent.assert_called_once_with(
             page=page_mock,
-            selector="div.flex.w-full.items-center.justify-start.pl-3.font-bold p",
+            selector=OddsPortalSelectors.SUB_MARKET_SELECTOR,
             text=specific_market,
         )
 
@@ -188,7 +187,7 @@ class TestNavigationManager:
         assert result is True
         scroller_mock.scroll_until_visible_and_click_parent.assert_called_once_with(
             page=page_mock,
-            selector="div.flex.w-full.items-center.justify-start.pl-3.font-bold p",
+            selector=OddsPortalSelectors.SUB_MARKET_SELECTOR,
             text="+20.5 Games",
         )
 
@@ -219,7 +218,7 @@ class TestNavigationManager:
         assert result is True
         scroller_mock.scroll_until_visible_and_click_parent.assert_called_once_with(
             page=page_mock,
-            selector="div.flex.w-full.items-center.justify-start.pl-3.font-bold p",
+            selector=OddsPortalSelectors.SUB_MARKET_SELECTOR,
             text=specific_market,
         )
 
@@ -240,7 +239,7 @@ class TestNavigationManager:
         assert result is True
         scroller_mock.scroll_until_visible_and_click_parent.assert_called_once_with(
             page=page_mock,
-            selector="div.flex.w-full.items-center.justify-start.pl-3.font-bold p",
+            selector=OddsPortalSelectors.SUB_MARKET_SELECTOR,
             text="+20.5 Games",
         )
 

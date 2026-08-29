@@ -110,15 +110,19 @@ class PageScroller:
                         bounding_box = await element.bounding_box()
                         if bounding_box:
                             self.logger.info(f"Element with text '{text}' is visible. Clicking its parent.")
-                            parent_element = await element.evaluate_handle("element => element.parentElement")
-                            await parent_element.click()
+                            click_target = await element.evaluate_handle(
+                                "element => element.closest('tr, button, [role=button]') || element.parentElement"
+                            )
+                            await click_target.click()
                             return True
                 else:
                     bounding_box = await element.bounding_box()
                     if bounding_box:
                         self.logger.info("Element is visible. Clicking its parent.")
-                        parent_element = await element.evaluate_handle("element => element.parentElement")
-                        await parent_element.click()
+                        click_target = await element.evaluate_handle(
+                            "element => element.closest('tr, button, [role=button]') || element.parentElement"
+                        )
+                        await click_target.click()
                         return True
 
             await page.evaluate("window.scrollBy(0, 500);")

@@ -10,6 +10,10 @@ on:
       - master
       - platform
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   test:
     name: Run Tests
@@ -46,5 +50,7 @@ jobs:
         with:
           fail_ci_if_error: true
           files: ./coverage.xml
-          token: ${{ secrets.CODECOV_TOKEN }}
+          # Codecov's repository endpoint is case-sensitive for mixed-case GitHub names.
+          slug: cahangeorge/oddsharvester
+          use_oidc: true
           verbose: true

@@ -18,6 +18,14 @@ def test_market_code_from_url_default_active_tab():
     assert OddsPortalSelectors.market_code_from_url("https://x/#abcd:1X2;2") == "1X2"
 
 
+def test_market_code_matches_current_and_legacy_fragments():
+    assert OddsPortalSelectors.market_code_matches("Over/Under", "https://x/#abcd:O/U;2")
+    assert OddsPortalSelectors.market_code_matches("Over/Under", "https://x/#abcd:over-under;2")
+    assert OddsPortalSelectors.market_code_matches("Double Chance", "https://x/#abcd:DC;2")
+    assert OddsPortalSelectors.market_code_matches("Double Chance", "https://x/#abcd:double;2")
+    assert not OddsPortalSelectors.market_code_matches("Draw No Bet", "https://x/#abcd:BTS;2")
+
+
 def test_market_code_from_url_no_market_segment():
     # Fragment with only the match id (before any market tab is clicked).
     assert OddsPortalSelectors.market_code_from_url("https://x/#abcd") is None
@@ -122,3 +130,15 @@ def test_market_tab_codes_cover_registry_main_markets():
         "Draw No Bet",
     }
     assert expected <= set(OddsPortalSelectors.MARKET_TAB_CODES)
+
+
+def test_current_sports_nav_selectors_precede_legacy_fallbacks():
+    assert OddsPortalSelectors.MARKET_TAB_SELECTORS[0] == (
+        "div[data-testid='sports-nav'] button[data-testid='sports-nav-active-tab']"
+    )
+    assert "sports-nav-inactive-tab" in OddsPortalSelectors.MARKET_TAB_ITEM_SELECTOR
+    assert OddsPortalSelectors.MORE_BUTTON_SELECTORS[0] == (
+        "div[data-testid='sports-nav'] > div > div:has(img[alt='arrow'])"
+    )
+    assert "tr[class*='cursor-pointer']" in OddsPortalSelectors.SUB_MARKET_SELECTOR
+    assert "span[class~='max-sm:hidden']" in OddsPortalSelectors.SUB_MARKET_SELECTOR

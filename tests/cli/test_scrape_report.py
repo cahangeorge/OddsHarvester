@@ -44,6 +44,8 @@ def test_write_scrape_report_has_stable_versioned_shape(tmp_path):
         "status",
         "outcome",
         "engines",
+        "cleanup",
+        "markets",
         "source",
         "locale",
         "timezone",
@@ -62,6 +64,13 @@ def test_write_scrape_report_has_stable_versioned_shape(tmp_path):
         "cache": {},
         "repair": {"status": "repair_skipped", "reason": "not_requested"},
     }
+    assert report["cleanup"] == {"status": "success"}
+    assert report["markets"] == {
+        "status": "not_requested",
+        "requested": [],
+        "complete_records": 0,
+        "missing_by_market": {},
+    }
     assert report["stats"] == {
         "total_urls": 3,
         "successful": 1,
@@ -72,6 +81,133 @@ def test_write_scrape_report_has_stable_versioned_shape(tmp_path):
     assert report["failures"][0]["error_type"] == "navigation"
     assert report["warnings"] == ["Market btts missing"]
     assert report["timing"]["duration_seconds"] == 1.234
+
+
+def test_v11_requested_market_coverage_degrades_truthful_partial_output(tmp_path):
+    started_at = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
+    output = tmp_path / "report.json"
+    result = ScrapeResult(
+        success=[{"match": "A v B", "1x2_market": [{"bookmaker": "A"}], "btts_market": []}],
+        stats=ScrapeStats(total_urls=1, successful=1),
+    )
+
+    write_scrape_report(
+        str(output),
+        command="upcoming",
+        result=result,
+        requested_engine="playwright",
+        source={"sport": "football", "markets": ["1x2", "btts"]},
+        locale=None,
+        timezone=None,
+        started_at=started_at,
+        finished_at=started_at,
+    )
+
+    report = json.loads(output.read_text())
+    assert report["status"] == "partial"
+    assert report["markets"] == {
+        "status": "incomplete",
+        "requested": ["1x2", "btts"],
+        "complete_records": 0,
+        "missing_by_market": {"btts": 1},
+    }
+    assert report["warnings"] == ["Requested market coverage is incomplete: btts."]
+
+
+def test_v11_cleanup_failure_is_partial_and_does_not_expose_raw_detail(tmp_path):
+    started_at = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
+    output = tmp_path / "report.json"
+    result = ScrapeResult(
+        success=[{"match": "A v B"}],
+        stats=ScrapeStats(total_urls=1, successful=1),
+        metadata={
+            "cleanup": {
+                "status": "failed",
+                "phase": "final_cleanup",
+                "error_type": "RuntimeError",
+                "message": "secret-token-cleanup-detail",
+            }
+        },
+    )
+
+    write_scrape_report(
+        str(output),
+        command="upcoming",
+        result=result,
+        requested_engine="playwright",
+        source={"sport": "football"},
+        locale=None,
+        timezone=None,
+        started_at=started_at,
+        finished_at=started_at,
+    )
+
+    report_text = output.read_text()
+    report = json.loads(report_text)
+    assert report["schema_version"] == "1.1"
+    assert report["status"] == "partial"
+    assert report["outcome"] == "partial"
+    assert report["stats"]["successful"] == 1
+    assert report["cleanup"] == {
+        "status": "failed",
+        "phase": "final_cleanup",
+        "error_type": "RuntimeError",
+    }
+    assert report["warnings"] == ["Cleanup failed during final_cleanup (RuntimeError)."]
+    assert "secret-token-cleanup-detail" not in report_text
+
+
+def test_v11_cleanup_failure_with_no_successes_is_failed(tmp_path):
+    started_at = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
+    output = tmp_path / "report.json"
+    result = ScrapeResult(
+        failed=[FailedUrl("https://example.test/failed", ErrorType.NAVIGATION, "timed out")],
+        stats=ScrapeStats(total_urls=1, failed=1),
+        metadata={"cleanup": {"status": "failed", "phase": "final_cleanup", "error_type": "RuntimeError"}},
+    )
+
+    write_scrape_report(
+        str(output),
+        command="upcoming",
+        result=result,
+        requested_engine="playwright",
+        source={"sport": "football"},
+        locale=None,
+        timezone=None,
+        started_at=started_at,
+        finished_at=started_at,
+    )
+
+    report = json.loads(output.read_text())
+    assert report["status"] == "failed"
+
+
+def test_v11_truthful_no_fixtures_with_cleanup_failure_is_failed(tmp_path):
+    started_at = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
+    output = tmp_path / "report.json"
+    result = ScrapeResult(
+        stats=ScrapeStats(total_urls=0),
+        metadata={
+            "discovery_outcome": "no_fixtures",
+            "cleanup": {"status": "failed", "phase": "final_cleanup", "error_type": "RuntimeError"},
+        },
+    )
+
+    write_scrape_report(
+        str(output),
+        command="upcoming",
+        result=result,
+        requested_engine="auto",
+        source={"sport": "football"},
+        locale=None,
+        timezone=None,
+        started_at=started_at,
+        finished_at=started_at,
+    )
+
+    report = json.loads(output.read_text())
+    assert report["status"] == "failed"
+    assert report["outcome"] == "failed"
 
 
 def test_v11_no_fixtures_requires_explicit_discovery_attestation(tmp_path):

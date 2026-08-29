@@ -5,8 +5,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from oddsharvester.core.camoufox_manager import CamoufoxManager
+from oddsharvester.core.camoufox_manager import CamoufoxManager, CamoufoxUnavailableError
 from oddsharvester.utils.proxy_manager import ProxyManager
+
+
+class FakeCamoufoxNotInstalledError(RuntimeError):
+    pass
+
+
+FakeCamoufoxNotInstalled = FakeCamoufoxNotInstalledError
 
 
 @pytest.mark.asyncio
@@ -36,6 +43,11 @@ async def test_camoufox_partial_initialization_is_cleaned_up(monkeypatch):
         SimpleNamespace(DefaultAddons=FakeDefaultAddons),
     )
     monkeypatch.setitem(sys.modules, "camoufox.async_api", SimpleNamespace(AsyncCamoufox=FakeCamoufox))
+    monkeypatch.setitem(
+        sys.modules,
+        "camoufox.exceptions",
+        SimpleNamespace(CamoufoxNotInstalled=FakeCamoufoxNotInstalled),
+    )
     manager = CamoufoxManager()
     monkeypatch.setattr(manager, "_create_context", AsyncMock(side_effect=RuntimeError("context failed")))
 
@@ -96,10 +108,13 @@ async def test_camoufox_multi_proxy_contexts_reuse_pool_health(monkeypatch):
         SimpleNamespace(DefaultAddons=FakeDefaultAddons),
     )
     monkeypatch.setitem(sys.modules, "camoufox.async_api", SimpleNamespace(AsyncCamoufox=FakeCamoufox))
-
-    proxy_manager = ProxyManager(
-        proxy_urls=["http://a.example:8000", "http://b.example:8000"]
+    monkeypatch.setitem(
+        sys.modules,
+        "camoufox.exceptions",
+        SimpleNamespace(CamoufoxNotInstalled=FakeCamoufoxNotInstalled),
     )
+
+    proxy_manager = ProxyManager(proxy_urls=["http://a.example:8000", "http://b.example:8000"])
     proxy_manager.blacklist_proxy(proxy_manager.entries[0].key)
     manager = CamoufoxManager()
 
@@ -122,3 +137,70 @@ async def test_camoufox_multi_proxy_contexts_reuse_pool_health(monkeypatch):
     assert page.context_key == proxy_key
     await manager.cleanup()
     assert lifecycle == ["enter", "exit"]
+
+
+@pytest.mark.asyncio
+async def test_camoufox_missing_browser_assets_map_to_unavailable_and_cleanup_once(monkeypatch):
+    class FakeDefaultAddons(Enum):
+        UBO = "ubo"
+
+    class FakeCamoufox:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise FakeCamoufoxNotInstalled("official/stable is not installed")
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setitem(sys.modules, "camoufox", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "camoufox.addons", SimpleNamespace(DefaultAddons=FakeDefaultAddons))
+    monkeypatch.setitem(sys.modules, "camoufox.async_api", SimpleNamespace(AsyncCamoufox=FakeCamoufox))
+    monkeypatch.setitem(
+        sys.modules,
+        "camoufox.exceptions",
+        SimpleNamespace(CamoufoxNotInstalled=FakeCamoufoxNotInstalled),
+    )
+    manager = CamoufoxManager()
+    cleanup = AsyncMock(wraps=manager.cleanup)
+    monkeypatch.setattr(manager, "cleanup", cleanup)
+
+    with pytest.raises(CamoufoxUnavailableError, match="browser assets") as exc_info:
+        await manager.initialize(headless=True)
+
+    assert isinstance(exc_info.value.__cause__, FakeCamoufoxNotInstalled)
+    cleanup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_camoufox_unrelated_runtime_error_propagates_after_cleanup(monkeypatch):
+    class FakeDefaultAddons(Enum):
+        UBO = "ubo"
+
+    class FakeCamoufox:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise RuntimeError("internal bug")
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setitem(sys.modules, "camoufox", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "camoufox.addons", SimpleNamespace(DefaultAddons=FakeDefaultAddons))
+    monkeypatch.setitem(sys.modules, "camoufox.async_api", SimpleNamespace(AsyncCamoufox=FakeCamoufox))
+    monkeypatch.setitem(
+        sys.modules,
+        "camoufox.exceptions",
+        SimpleNamespace(CamoufoxNotInstalled=FakeCamoufoxNotInstalled),
+    )
+    manager = CamoufoxManager()
+    cleanup = AsyncMock(wraps=manager.cleanup)
+    monkeypatch.setattr(manager, "cleanup", cleanup)
+
+    with pytest.raises(RuntimeError, match="internal bug"):
+        await manager.initialize(headless=True)
+
+    cleanup.assert_awaited_once()

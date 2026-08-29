@@ -21,6 +21,7 @@ from oddsharvester.core.scrape_result import ErrorType, FailedUrl, ScrapeResult
 from oddsharvester.core.scrapling_scraper import (
     DEFAULT_EGRESS_COOLDOWN_BASE_SECONDS,
     DEFAULT_EGRESS_COOLDOWN_MAX_SECONDS,
+    RequestedLeagueProvenanceError,
     ScraplingProxyError,
     ScraplingUnavailableError,
     StaticListingRequiresBrowserError,
@@ -85,6 +86,7 @@ async def run_scraper(
     scraper_engine: str = ScraperEngine.PLAYWRIGHT.value,
     include_started: bool = False,
     _proxy_manager: ProxyManager | None = None,
+    _requested_league_by_match_link: dict[str, str] | None = None,
 ) -> ScrapeResult | None:
     """
     Runs the scraping process and handles execution.
@@ -150,9 +152,15 @@ async def run_scraper(
     attempts: list[dict[str, str]] = []
     repair_metadata = {"status": "repair_skipped", "reason": "operator_only"}
     browser_attempted = False
+    primary_cleanup_attempted = False
+    primary_cleanup_diagnostic: dict[str, str] | None = None
+    completed_result: ScrapeResult | None = None
     fast_path_success: list[dict] = []
     fast_path_egress: list[dict] = []
     anti_bot_observed = False
+    requested_league_by_match_link = dict(_requested_league_by_match_link or {})
+    league_scoped_auto_discovery = normalized_engine == ScraperEngine.AUTO.value and not match_links and bool(leagues)
+    requested_leagues = set(leagues or [])
 
     async def wait_before_same_egress_fallback(
         *,
@@ -189,11 +197,59 @@ async def run_scraper(
                 seconds=float(raw_seconds),
             )
 
+    def retain_requested_league_mapping(result: ScrapeResult) -> None:
+        discovered_links = result.metadata.get("_discovered_match_links")
+        discovered_mapping = result.metadata.get("_requested_league_by_match_link")
+        if league_scoped_auto_discovery and discovered_links is not None:
+            valid = (
+                isinstance(discovered_links, list)
+                and all(isinstance(link, str) for link in discovered_links)
+                and isinstance(discovered_mapping, dict)
+                and set(discovered_mapping) == set(discovered_links)
+                and all(
+                    isinstance(link, str) and isinstance(league, str) and league in requested_leagues
+                    for link, league in discovered_mapping.items()
+                )
+            )
+            if not valid:
+                raise RequestedLeagueProvenanceError("Requested league provenance is invalid")
+        if not isinstance(discovered_mapping, dict):
+            return
+        for link, league in discovered_mapping.items():
+            if not isinstance(link, str) or not isinstance(league, str):
+                continue
+            existing = requested_league_by_match_link.get(link)
+            if existing is not None and existing != league:
+                raise RequestedLeagueProvenanceError("Requested league provenance is invalid")
+            requested_league_by_match_link[link] = league
+
+    def enforce_single_requested_league(result: ScrapeResult) -> None:
+        """Complete final provenance for an exact single-league discovery.
+
+        Browser fallbacks can return the same match with a normalized URL that
+        no longer matches the discovery URL byte-for-byte.  The outer request
+        is nevertheless scoped to one explicit league.  Preserve that
+        authoritative scope after all fallback merges, while still rejecting
+        any conflicting provenance supplied by an adapter.
+        """
+
+        if not league_scoped_auto_discovery or len(requested_leagues) != 1:
+            return
+        requested_league = next(iter(requested_leagues))
+        for record in result.success:
+            existing = record.get("requested_league_slug")
+            if existing is not None and existing != requested_league:
+                raise RequestedLeagueProvenanceError("Requested league provenance is invalid")
+            record["requested_league_slug"] = requested_league
+        for partial in result.partial:
+            existing = partial.data.get("requested_league_slug")
+            if existing is not None and existing != requested_league:
+                raise RequestedLeagueProvenanceError("Requested league provenance is invalid")
+            partial.data["requested_league_slug"] = requested_league
+
     def retain_fast_path_success(result: ScrapeResult) -> None:
         known_links = {str(row.get("match_link") or "") for row in fast_path_success}
-        fast_path_success.extend(
-            row for row in result.success if str(row.get("match_link") or "") not in known_links
-        )
+        fast_path_success.extend(row for row in result.success if str(row.get("match_link") or "") not in known_links)
 
     def combine_fast_path_success(result: ScrapeResult | None) -> ScrapeResult | None:
         if not isinstance(result, ScrapeResult) or not fast_path_success:
@@ -214,30 +270,47 @@ async def run_scraper(
         primary.success.extend(
             row for row in retry.success if str(row.get("match_link") or "") not in primary_success_urls
         )
-        primary.failed = [
-            failure for failure in primary.failed if failure.url not in retry_success_urls
-        ]
+        primary.failed = [failure for failure in primary.failed if failure.url not in retry_success_urls]
         existing_failures = {failure.url for failure in primary.failed}
-        primary.failed.extend(
-            failure for failure in retry.failed if failure.url not in existing_failures
-        )
+        primary.failed.extend(failure for failure in retry.failed if failure.url not in existing_failures)
         primary.partial.extend(retry.partial)
         primary.metadata.update(retry.metadata)
         primary.stats.successful = len(primary.success)
         primary.stats.failed = len(primary.failed)
         primary.stats.partial = len(primary.partial)
-        primary.stats.total_urls = (
-            primary.stats.successful + primary.stats.failed + primary.stats.partial
-        )
+        primary.stats.total_urls = primary.stats.successful + primary.stats.failed + primary.stats.partial
         return primary
 
+    def attach_cleanup_diagnostic(result: ScrapeResult, diagnostic: dict[str, str]) -> None:
+        result.metadata["cleanup"] = diagnostic
+
+    async def cleanup_primary_scraper(*, phase: str) -> dict[str, str] | None:
+        nonlocal primary_cleanup_attempted, primary_cleanup_diagnostic
+        if primary_cleanup_attempted:
+            return primary_cleanup_diagnostic
+        primary_cleanup_attempted = True
+        try:
+            await scraper.stop_playwright()
+        except Exception as exc:
+            primary_cleanup_diagnostic = {
+                "status": "failed",
+                "phase": phase[:40],
+                "error_type": type(exc).__name__[:80],
+            }
+            logger.error(
+                "Scraper cleanup failed: phase=%s error_type=%s",
+                primary_cleanup_diagnostic["phase"],
+                primary_cleanup_diagnostic["error_type"],
+            )
+        return primary_cleanup_diagnostic
+
     async def with_execution_metadata(result: ScrapeResult | None) -> ScrapeResult | None:
-        nonlocal repair_metadata
+        nonlocal completed_result, repair_metadata
         result = combine_fast_path_success(result)
+        if isinstance(result, ScrapeResult):
+            retain_requested_league_mapping(result)
         camoufox_recovery_needed = bool(
-            isinstance(result, ScrapeResult)
-            and result.failed
-            and (anti_bot_observed or _should_try_camoufox(result))
+            isinstance(result, ScrapeResult) and result.failed and (anti_bot_observed or _should_try_camoufox(result))
         )
         if (
             normalized_engine == ScraperEngine.AUTO.value
@@ -248,58 +321,74 @@ async def run_scraper(
             attempts.append({"engine": ScraperEngine.PLAYWRIGHT.value, "outcome": "fallback_triggered"})
             primary_result = result
             camoufox_links = [failure.url for failure in result.failed]
-            # Close the first browser before allocating Camoufox. This keeps
-            # browser resource usage deterministic and prevents overlap.
-            await scraper.stop_playwright()
-            await wait_before_same_egress_fallback(
-                reason="camoufox_fallback",
-                seconds=cooldown_base,
-            )
-            try:
-                fallback = await run_scraper(
-                    command=command,
-                    match_links=camoufox_links,
-                    sport=sport,
-                    date=date,
-                    leagues=leagues,
-                    season=season,
-                    markets=markets,
-                    max_pages=max_pages,
-                    proxy_url=proxy_url,
-                    proxy_user=proxy_user,
-                    proxy_pass=proxy_pass,
-                    browser_user_agent=browser_user_agent,
-                    browser_locale_timezone=browser_locale_timezone,
-                    browser_timezone_id=browser_timezone_id,
-                    base_url=base_url,
-                    target_bookmaker=target_bookmaker,
-                    scrape_odds_history=scrape_odds_history,
-                    headless=headless,
-                    preview_submarkets_only=preview_submarkets_only,
-                    bookies_filter=bookies_filter,
-                    period=period,
-                    request_delay=request_delay,
-                    concurrency_tasks=min(concurrency_tasks, 2),
-                    http_concurrency_tasks=http_concurrency_tasks,
-                    scraper_engine=ScraperEngine.CAMOUFOX.value,
-                    include_started=include_started,
-                    _proxy_manager=proxy_manager,
-                )
-            except CamoufoxUnavailableError as exc:
+            # Camoufox must never overlap a primary browser whose cleanup did
+            # not complete successfully.
+            cleanup_diagnostic = await cleanup_primary_scraper(phase="pre_camoufox")
+            if cleanup_diagnostic is not None:
+                attach_cleanup_diagnostic(primary_result, cleanup_diagnostic)
                 attempts.append(
                     {
                         "engine": ScraperEngine.CAMOUFOX.value,
-                        "outcome": "unavailable",
-                        "detail": type(exc).__name__,
+                        "outcome": "blocked",
+                        "detail": "primary_cleanup_failed",
                     }
                 )
                 result = primary_result
             else:
-                attempts.append({"engine": ScraperEngine.CAMOUFOX.value, "outcome": "completed"})
-                if isinstance(fallback, ScrapeResult):
-                    result = merge_retry_result(primary_result, fallback)
-                else:
+                await wait_before_same_egress_fallback(
+                    reason="camoufox_fallback",
+                    seconds=cooldown_base,
+                )
+                try:
+                    fallback = await run_scraper(
+                        command=command,
+                        match_links=camoufox_links,
+                        sport=sport,
+                        date=date,
+                        leagues=leagues,
+                        season=season,
+                        markets=markets,
+                        max_pages=max_pages,
+                        proxy_url=proxy_url,
+                        proxy_user=proxy_user,
+                        proxy_pass=proxy_pass,
+                        browser_user_agent=browser_user_agent,
+                        browser_locale_timezone=browser_locale_timezone,
+                        browser_timezone_id=browser_timezone_id,
+                        base_url=base_url,
+                        target_bookmaker=target_bookmaker,
+                        scrape_odds_history=scrape_odds_history,
+                        headless=headless,
+                        preview_submarkets_only=preview_submarkets_only,
+                        bookies_filter=bookies_filter,
+                        period=period,
+                        request_delay=request_delay,
+                        concurrency_tasks=min(concurrency_tasks, 2),
+                        http_concurrency_tasks=http_concurrency_tasks,
+                        scraper_engine=ScraperEngine.CAMOUFOX.value,
+                        include_started=include_started,
+                        _proxy_manager=proxy_manager,
+                        _requested_league_by_match_link={
+                            link: requested_league_by_match_link[link]
+                            for link in camoufox_links
+                            if link in requested_league_by_match_link
+                        },
+                    )
+                except CamoufoxUnavailableError as exc:
+                    attempts.append(
+                        {
+                            "engine": ScraperEngine.CAMOUFOX.value,
+                            "outcome": "unavailable",
+                            "detail": type(exc).__name__,
+                        }
+                    )
                     result = primary_result
+                else:
+                    attempts.append({"engine": ScraperEngine.CAMOUFOX.value, "outcome": "completed"})
+                    if isinstance(fallback, ScrapeResult):
+                        result = merge_retry_result(primary_result, fallback)
+                    else:
+                        result = primary_result
         elif normalized_engine == ScraperEngine.AUTO.value and browser_attempted:
             browser_succeeded = bool(result.success) if isinstance(result, ScrapeResult) else result is not None
             attempts.append(
@@ -309,6 +398,7 @@ async def run_scraper(
                 }
             )
         if isinstance(result, ScrapeResult):
+            enforce_single_requested_league(result)
             result.metadata.setdefault("cache", {"status": "disabled"})
             result.metadata.update(
                 {
@@ -317,6 +407,7 @@ async def run_scraper(
                     "xhr_egress_attempts": fast_path_egress,
                 }
             )
+            completed_result = result
         return result
 
     async def try_scrapling(engine: str) -> ScrapeResult | None:
@@ -352,7 +443,9 @@ async def run_scraper(
                 bookies_filter=bookies_filter_enum.value,
                 preview_submarkets_only=preview_submarkets_only,
                 include_started=include_started,
+                requested_league_by_match_link=requested_league_by_match_link,
             )
+            retain_requested_league_mapping(result)
             outcome = "partial" if result.success and result.failed else "success" if result.success else "no_records"
             attempts.append({"engine": engine, "outcome": outcome})
             egress = result.metadata.get("egress")
@@ -361,7 +454,7 @@ async def run_scraper(
             if any(failure.error_type.value == ErrorType.RATE_LIMITED.value for failure in result.failed):
                 anti_bot_observed = True
             return result
-        except StaticListingRequiresBrowserError:
+        except (RequestedLeagueProvenanceError, StaticListingRequiresBrowserError):
             raise
         except ScraplingProxyError as exc:
             anti_bot_observed = True
@@ -480,20 +573,20 @@ async def run_scraper(
                 scrape_odds_history={scrape_odds_history}, target_bookmaker={target_bookmaker},
                 bookies_filter={bookies_filter}, period={period}
             """)
-            return await with_execution_metadata(
-                await retry_scrape(
-                    scraper.scrape_matches,
-                    match_links=match_links,
-                    sport=sport,
-                    markets=markets,
-                    scrape_odds_history=scrape_odds_history,
-                    target_bookmaker=target_bookmaker,
-                    bookies_filter=bookies_filter_enum,
-                    period=period_enum,
-                    request_delay=request_delay,
-                    concurrent_scraping_task=concurrency_tasks,
-                )
+            match_result = await retry_scrape(
+                scraper.scrape_matches,
+                match_links=match_links,
+                sport=sport,
+                markets=markets,
+                scrape_odds_history=scrape_odds_history,
+                target_bookmaker=target_bookmaker,
+                bookies_filter=bookies_filter_enum,
+                period=period_enum,
+                request_delay=request_delay,
+                concurrent_scraping_task=concurrency_tasks,
             )
+            _annotate_requested_league(match_result, requested_league_by_match_link)
+            return await with_execution_metadata(match_result)
 
         if command == CommandEnum.HISTORIC:
             if not sport or not leagues:
@@ -508,22 +601,22 @@ async def run_scraper(
             )
 
             if len(leagues) == 1:
-                return await with_execution_metadata(
-                    await retry_scrape(
-                        scraper.scrape_historic,
-                        sport=sport,
-                        league=leagues[0],
-                        season=season,
-                        markets=markets,
-                        scrape_odds_history=scrape_odds_history,
-                        target_bookmaker=target_bookmaker,
-                        max_pages=max_pages,
-                        bookies_filter=bookies_filter_enum,
-                        period=period_enum,
-                        request_delay=request_delay,
-                        concurrent_scraping_task=concurrency_tasks,
-                    )
+                league_result = await retry_scrape(
+                    scraper.scrape_historic,
+                    sport=sport,
+                    league=leagues[0],
+                    season=season,
+                    markets=markets,
+                    scrape_odds_history=scrape_odds_history,
+                    target_bookmaker=target_bookmaker,
+                    max_pages=max_pages,
+                    bookies_filter=bookies_filter_enum,
+                    period=period_enum,
+                    request_delay=request_delay,
+                    concurrent_scraping_task=concurrency_tasks,
                 )
+                _annotate_requested_league(league_result, leagues[0])
+                return await with_execution_metadata(league_result)
             else:
                 return await with_execution_metadata(
                     await _scrape_multiple_leagues(
@@ -554,22 +647,22 @@ async def run_scraper(
                 """)
 
                 if len(leagues) == 1:
-                    return await with_execution_metadata(
-                        await retry_scrape(
-                            scraper.scrape_upcoming,
-                            sport=sport,
-                            date=date,
-                            league=leagues[0],
-                            markets=markets,
-                            scrape_odds_history=scrape_odds_history,
-                            target_bookmaker=target_bookmaker,
-                            bookies_filter=bookies_filter_enum,
-                            period=period_enum,
-                            request_delay=request_delay,
-                            concurrent_scraping_task=concurrency_tasks,
-                            include_started=include_started,
-                        )
+                    league_result = await retry_scrape(
+                        scraper.scrape_upcoming,
+                        sport=sport,
+                        date=date,
+                        league=leagues[0],
+                        markets=markets,
+                        scrape_odds_history=scrape_odds_history,
+                        target_bookmaker=target_bookmaker,
+                        bookies_filter=bookies_filter_enum,
+                        period=period_enum,
+                        request_delay=request_delay,
+                        concurrent_scraping_task=concurrency_tasks,
+                        include_started=include_started,
                     )
+                    _annotate_requested_league(league_result, leagues[0])
+                    return await with_execution_metadata(league_result)
                 else:
                     return await with_execution_metadata(
                         await _scrape_multiple_leagues(
@@ -619,7 +712,9 @@ async def run_scraper(
         raise  # Re-raise so CLI can surface the actual error to user
 
     finally:
-        await scraper.stop_playwright()
+        cleanup_diagnostic = await cleanup_primary_scraper(phase="final_cleanup")
+        if cleanup_diagnostic is not None and completed_result is not None:
+            attach_cleanup_diagnostic(completed_result, cleanup_diagnostic)
 
 
 async def _scrape_multiple_leagues(
@@ -641,6 +736,7 @@ async def _scrape_multiple_leagues(
     combined_result = ScrapeResult()
     failed_leagues = []
     all_leagues_no_fixtures = bool(leagues)
+    league_by_link: dict[str, str] = {}
 
     logger.info(f"Starting multi-league scraping for {len(leagues)} leagues: {leagues}")
 
@@ -649,6 +745,17 @@ async def _scrape_multiple_leagues(
             logger.info(f"[{i}/{len(leagues)}] Processing league: {league}")
 
             league_result = await retry_scrape(scrape_func, sport=sport, league=league, **kwargs)
+            _annotate_requested_league(league_result, league)
+            if isinstance(league_result, ScrapeResult):
+                attempted_links = [record.get("match_link") for record in league_result.success]
+                attempted_links.extend(failure.url for failure in league_result.failed)
+                attempted_links.extend(partial.url for partial in league_result.partial)
+                for link in attempted_links:
+                    if not isinstance(link, str) or not link:
+                        continue
+                    owner = league_by_link.setdefault(link, league)
+                    if owner != league:
+                        raise RequestedLeagueProvenanceError("Requested league provenance is invalid")
 
             if isinstance(league_result, ScrapeResult) and league_result.is_truthful_no_fixtures():
                 logger.info(f"No fixtures discovered for league: {league}")
@@ -691,6 +798,8 @@ async def _scrape_multiple_leagues(
             else:
                 logger.warning(f"No data returned for league: {league}")
 
+        except RequestedLeagueProvenanceError:
+            raise
         except Exception as e:
             logger.error(f"Failed to scrape league '{league}': {e}")
             failed_leagues.append(league)
@@ -703,6 +812,9 @@ async def _scrape_multiple_leagues(
         combined_result.metadata["discovery_outcome"] = "no_fixtures"
     else:
         combined_result.metadata.pop("discovery_outcome", None)
+    if league_by_link:
+        combined_result.metadata["_discovered_match_links"] = list(league_by_link)
+        combined_result.metadata["_requested_league_by_match_link"] = dict(league_by_link)
 
     successful_leagues = len(leagues) - len(failed_leagues)
 
@@ -716,6 +828,22 @@ async def _scrape_multiple_leagues(
     )
 
     return combined_result
+
+
+def _annotate_requested_league(
+    result: ScrapeResult | None,
+    league: str | dict[str, str],
+) -> None:
+    if not isinstance(result, ScrapeResult):
+        return
+    for record in result.success:
+        requested_league = league.get(str(record.get("match_link") or "")) if isinstance(league, dict) else league
+        if requested_league is not None:
+            record["requested_league_slug"] = requested_league
+    for partial in result.partial:
+        requested_league = league.get(partial.url) if isinstance(league, dict) else league
+        if requested_league is not None:
+            partial.data["requested_league_slug"] = requested_league
 
 
 def _record_league_failure(

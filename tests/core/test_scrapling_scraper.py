@@ -6,6 +6,7 @@ import pytest
 from oddsharvester.core.oddsportal_xhr import OddsPortalXHRSchemaError
 from oddsharvester.core.scrapling_scraper import (
     MAX_DECODED_CACHE_BYTES,
+    RequestedLeagueProvenanceError,
     ScraplingOddsPortalScraper,
     ScraplingProxyError,
     ScraplingUnavailableError,
@@ -39,6 +40,87 @@ async def test_unexpected_match_programming_error_is_not_masked(monkeypatch):
             target_bookmaker=None,
             include_started=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_multi_league_records_keep_listing_provenance(monkeypatch):
+    scraper = ScraplingOddsPortalScraper(engine="scrapling-http")
+    premier_link = "https://www.oddsportal.com/football/h2h/premier-home/premier-away/#one"
+    brazil_link = "https://www.oddsportal.com/football/h2h/brazil-home/brazil-away/#two"
+
+    async def collect_listing(*, page_url, **_kwargs):
+        return [brazil_link] if "brazil" in page_url else [premier_link]
+
+    async def scrape_match(*, match_link, **_kwargs):
+        return {"match_link": match_link}
+
+    monkeypatch.setattr(scraper, "_collect_listing_xhr", collect_listing)
+    monkeypatch.setattr(scraper, "_scrape_match_xhr_with_failover", scrape_match)
+
+    result = await scraper._scrape_open_session(
+        command=CommandEnum.HISTORIC,
+        match_links=None,
+        sport="football",
+        date_value=None,
+        leagues=["england-premier-league", "brazil-serie-a"],
+        season="2024",
+        markets=["1x2"],
+        max_pages=None,
+        target_bookmaker=None,
+        include_started=False,
+    )
+
+    assert result.success == [
+        {"match_link": premier_link, "requested_league_slug": "england-premier-league"},
+        {"match_link": brazil_link, "requested_league_slug": "brazil-serie-a"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cross_league_duplicate_link_fails_closed(monkeypatch):
+    scraper = ScraplingOddsPortalScraper(engine="scrapling-http")
+    duplicate = "https://www.oddsportal.com/football/h2h/home-team/away-team/#event"
+    monkeypatch.setattr(
+        scraper,
+        "_collect_listing_xhr",
+        lambda **_kwargs: _async_value([duplicate]),
+    )
+
+    with pytest.raises(RequestedLeagueProvenanceError, match="Requested league provenance is invalid"):
+        await scraper._collect_links(
+            command=CommandEnum.HISTORIC,
+            sport="football",
+            date_value=None,
+            leagues=["england-premier-league", "brazil-serie-a"],
+            season="2024",
+            max_pages=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_direct_match_links_do_not_fabricate_league_provenance(monkeypatch):
+    scraper = ScraplingOddsPortalScraper(engine="scrapling-http")
+    match_link = "https://www.oddsportal.com/football/h2h/home-team/away-team/#event"
+    monkeypatch.setattr(
+        scraper,
+        "_scrape_match_xhr_with_failover",
+        lambda **kwargs: _async_value({"match_link": kwargs["match_link"]}),
+    )
+
+    result = await scraper._scrape_open_session(
+        command=CommandEnum.UPCOMING_MATCHES,
+        match_links=[match_link],
+        sport="football",
+        date_value=None,
+        leagues=["premier-league"],
+        season=None,
+        markets=["1x2"],
+        max_pages=None,
+        target_bookmaker=None,
+        include_started=False,
+    )
+
+    assert result.success == [{"match_link": match_link}]
 
 
 @pytest.mark.asyncio
@@ -197,6 +279,39 @@ async def test_fast_path_rejects_browser_only_request_semantics(overrides, messa
         )
 
 
+def test_xhr_path_accepts_all_analysis_markets_and_rejects_unknown_market():
+    scraper = ScraplingOddsPortalScraper(engine="scrapling-http")
+    markets = [
+        "1x2",
+        "btts",
+        "double_chance",
+        "dnb",
+        "over_under_1_5",
+        "over_under_2_5",
+        "over_under_3_5",
+        "asian_handicap_-0_5",
+    ]
+
+    scraper._validate_supported_request(
+        sport="football",
+        markets=markets,
+        scrape_odds_history=False,
+        period="full_time",
+        bookies_filter="all",
+        preview_submarkets_only=False,
+    )
+
+    with pytest.raises(ScraplingUnavailableError, match="supports only these football markets"):
+        scraper._validate_supported_request(
+            sport="football",
+            markets=[*markets, "correct_score_1_0"],
+            scrape_odds_history=False,
+            period="full_time",
+            bookies_filter="all",
+            preview_submarkets_only=False,
+        )
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -224,13 +339,13 @@ async def test_listing_timestamp_drift_triggers_browser_fallback(monkeypatch):
         "_fetch_decoded",
         lambda *_args, **_kwargs: _async_value(
             {
-                    "d": {
-                        "rows": [{"url": "/football/h2h/home-team-id/away-team-id/#Abc123"}],
-                        "total": 1,
-                        "onePage": 50,
-                        "page": 1,
-                        "pagination": {"pageCount": 1},
-                    }
+                "d": {
+                    "rows": [{"url": "/football/h2h/home-team-id/away-team-id/#Abc123"}],
+                    "total": 1,
+                    "onePage": 50,
+                    "page": 1,
+                    "pagination": {"pageCount": 1},
+                }
             }
         ),
     )

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -47,6 +48,8 @@ class PlaywrightManager:
         self.contexts: dict = {}
         self._default_key: str | None = None
         self._proxy_manager = None
+        self._initialize_done: asyncio.Future[None] | None = None
+        self._cleanup_task: asyncio.Task[None] | None = None
 
     async def initialize(
         self,
@@ -64,19 +67,31 @@ class PlaywrightManager:
             proxy_manager: Optional ProxyManager providing the launch proxy and, in multi-proxy
                 mode, one context per proxy.
         """
+        if self._initialize_done is not None:
+            raise RuntimeError("Playwright initialization is already in progress.")
+
+        cleanup_task = self._cleanup_task
+        if cleanup_task is not None:
+            await asyncio.shield(cleanup_task)
+            if self._cleanup_task is cleanup_task:
+                self._cleanup_task = None
+            if self._initialize_done is not None:
+                raise RuntimeError("Playwright initialization is already in progress.")
+
+        if any((self.page, self.contexts, self.browser, self.playwright)):
+            raise RuntimeError("Playwright is already initialized; clean it up before reinitializing.")
+
+        initialize_done = asyncio.get_running_loop().create_future()
+        self._initialize_done = initialize_done
         try:
             self.logger.info("Starting Playwright...")
             self.timezone_id = timezone_id
             self._proxy_manager = proxy_manager
             healthy_entries = (
-                [entry for entry in proxy_manager.entries if not entry.blacklisted]
-                if proxy_manager
-                else []
+                [entry for entry in proxy_manager.entries if not entry.blacklisted] if proxy_manager else []
             )
             if proxy_manager and not healthy_entries:
-                raise AllProxiesExhaustedError(
-                    "All proxies are blacklisted; cannot initialize Playwright."
-                )
+                raise AllProxiesExhaustedError("All proxies are blacklisted; cannot initialize Playwright.")
             self.playwright = await async_playwright().start()
 
             browser_args = PLAYWRIGHT_BROWSER_ARGS_DOCKER if is_running_in_docker() else PLAYWRIGHT_BROWSER_ARGS
@@ -131,6 +146,10 @@ class PlaywrightManager:
         except Exception as e:
             self.logger.error(f"Failed to initialize Playwright: {e!s}")
             raise
+        finally:
+            initialize_done.set_result(None)
+            if self._initialize_done is initialize_done:
+                self._initialize_done = None
 
     async def _create_context(self, proxy, user_agent, locale, timezone_id, enable_har):
         """Create one browser context. HAR record/replay is applied to the default context only."""
@@ -214,14 +233,57 @@ class PlaywrightManager:
             self._proxy_manager.blacklist_proxy(key)
 
     async def cleanup(self):
-        """Properly closes Playwright instances."""
+        """Await the shared, cancellation-safe cleanup for the current lifecycle."""
+        cleanup_task = self._cleanup_task
+        if cleanup_task is None:
+            cleanup_task = asyncio.create_task(self._cleanup_resources(self._initialize_done))
+            self._cleanup_task = cleanup_task
+        await asyncio.shield(cleanup_task)
+
+    async def _cleanup_resources(self, initialize_done: asyncio.Future[None] | None) -> None:
+        """Close all captured resources once and retain the first close error."""
+        if initialize_done is not None:
+            # Initialization failure or caller cancellation can leave partial
+            # resources behind; wait until its final resource assignment ends.
+            await asyncio.shield(initialize_done)
+
         self.logger.info("Cleaning up Playwright resources...")
-        if self.page:
-            await self.page.close()
-        for context in self.contexts.values():
-            await context.close()
-        if self.browser:
-            await self.browser.close()
-        if self.playwright:
-            await self.playwright.stop()
+        page = self.page
+        contexts = list(self.contexts.values())
+        browser = self.browser
+        playwright = self.playwright
+
+        self.page = None
+        self.context = None
+        self.contexts = {}
+        self.browser = None
+        self.playwright = None
+        self.timezone_id = None
+        self._default_key = None
+        self._proxy_manager = None
+
+        cleanup_steps = []
+        if page:
+            cleanup_steps.append(("page", page.close))
+        cleanup_steps.extend(("context", context.close) for context in contexts)
+        if browser:
+            cleanup_steps.append(("browser", browser.close))
+        if playwright:
+            cleanup_steps.append(("playwright", playwright.stop))
+
+        first_error = None
+        for phase, cleanup_step in cleanup_steps:
+            try:
+                await cleanup_step()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+                self.logger.error(
+                    "Playwright cleanup step failed: phase=%s error_type=%s",
+                    phase,
+                    type(exc).__name__,
+                )
+
+        if first_error is not None:
+            raise first_error
         self.logger.info("Playwright resources cleanup complete.")

@@ -28,7 +28,13 @@ class MarketTabNavigator:
         self.logger.info(f"Attempting to navigate to market tab: {market_tab_name}")
 
         market_found = False
-        for selector in OddsPortalSelectors.MARKET_TAB_SELECTORS:
+        current_nav = await page.query_selector("div[data-testid='sports-nav']")
+        selectors = (
+            OddsPortalSelectors.MARKET_TAB_SELECTORS[:2]
+            if current_nav
+            else OddsPortalSelectors.MARKET_TAB_SELECTORS[2:]
+        )
+        for selector in selectors:
             if await self._wait_and_click(page=page, selector=selector, text=market_tab_name, timeout=timeout):
                 market_found = True
                 break
@@ -63,6 +69,7 @@ class MarketTabNavigator:
     async def _navigate_by_code(self, page: Page, target_code: str) -> bool:
         """Click each tab and match the URL-fragment market code (localized mirrors)."""
         try:
+            accepted_codes = OddsPortalSelectors.accepted_market_codes(target_code)
             await self._open_more_dropdown(page)
             elements = await page.query_selector_all(OddsPortalSelectors.MARKET_TAB_ITEM_SELECTOR)
             labels: list[str] = []
@@ -80,7 +87,8 @@ class MarketTabNavigator:
                 if not await self._click_by_text(page, OddsPortalSelectors.MARKET_TAB_ITEM_SELECTOR, label):
                     continue
                 await page.wait_for_timeout(TAB_SWITCH_WAIT_MS)
-                if OddsPortalSelectors.market_code_from_url(page.url) == target_code:
+                observed_code = OddsPortalSelectors.market_code_from_url(page.url)
+                if observed_code and observed_code.casefold() in accepted_codes:
                     self.logger.info(f"Market-code fallback matched tab '{label}' -> code '{target_code}'.")
                     return True
 
@@ -91,16 +99,19 @@ class MarketTabNavigator:
             return False
 
     async def _open_more_dropdown(self, page: Page) -> bool:
-        """Expand the 'More' overflow (idempotent; expanded state via `.drop-arrow-hide`)."""
+        """Expand the current or legacy market overflow without relying on translated text."""
         try:
-            more = await page.query_selector("button[data-testid='more-button']")
-            if not more:
-                return False
-            if await page.query_selector("button[data-testid='more-button'] .drop-arrow-hide"):
+            for expanded_selector in OddsPortalSelectors.MORE_EXPANDED_SELECTORS:
+                if await page.query_selector(expanded_selector):
+                    return True
+            for selector in OddsPortalSelectors.MORE_BUTTON_SELECTORS:
+                more = await page.query_selector(selector)
+                if not more:
+                    continue
+                await more.click(timeout=DEFAULT_MARKET_TIMEOUT_MS)
+                await page.wait_for_timeout(DROPDOWN_WAIT_MS)
                 return True
-            await more.click(timeout=DEFAULT_MARKET_TIMEOUT_MS)
-            await page.wait_for_timeout(DROPDOWN_WAIT_MS)
-            return True
+            return False
         except Exception as e:
             self.logger.debug(f"Could not open 'More' dropdown: {e}")
             return False
@@ -109,7 +120,10 @@ class MarketTabNavigator:
         self, page: Page, selector: str, text: str | None = None, timeout: float = DEFAULT_MARKET_TIMEOUT_MS
     ) -> bool:
         try:
-            await page.wait_for_selector(selector=selector, timeout=timeout)
+            # Overflow tabs stay attached while hidden. Waiting for attachment
+            # avoids a full timeout on the hidden active tab; _click_by_text
+            # remains responsible for selecting a visible matching element.
+            await page.wait_for_selector(selector=selector, timeout=timeout, state="attached")
             if text:
                 return await self._click_by_text(page=page, selector=selector, text=text)
             else:
@@ -126,6 +140,9 @@ class MarketTabNavigator:
             for element in elements:
                 element_text = await element.text_content()
                 if element_text and text in element_text:
+                    is_visible = getattr(element, "is_visible", None)
+                    if callable(is_visible) and not await is_visible():
+                        continue
                     await element.click()
                     return True
             self.logger.info(f"Element with text '{text}' not found.")
@@ -137,27 +154,14 @@ class MarketTabNavigator:
     async def _click_more_if_market_hidden(
         self, page: Page, market_tab_name: str, timeout: int = MARKET_TAB_TIMEOUT_MS
     ) -> bool:
+        del timeout
         try:
-            more_clicked = False
-            for selector in OddsPortalSelectors.MORE_BUTTON_SELECTORS:
-                try:
-                    more_element = await page.query_selector(selector)
-                    if more_element:
-                        text = await more_element.text_content()
-                        if text and ("more" in text.lower() or "..." in text):
-                            self.logger.info(f"Clicking 'More' button: '{text.strip()}'")
-                            await more_element.click()
-                            more_clicked = True
-                            break
-                except Exception as e:
-                    self.logger.debug(f"Exception while searching for 'More' button with selector '{selector}': {e}")
-                    continue
-
-            if not more_clicked:
+            if not market_tab_name or not await self._open_more_dropdown(page):
                 self.logger.warning("Could not find or click 'More' button")
                 return False
 
-            await page.wait_for_timeout(DROPDOWN_WAIT_MS)
+            if await self._click_by_text(page, OddsPortalSelectors.MARKET_TAB_ITEM_SELECTOR, market_tab_name):
+                return True
 
             dropdown_selectors = OddsPortalSelectors.get_dropdown_selectors_for_market(market_tab_name)
             for selector in dropdown_selectors:
@@ -195,8 +199,17 @@ class MarketTabNavigator:
 
     async def _verify_tab_is_active(self, page: Page, market_tab_name: str) -> bool:
         try:
+            if not market_tab_name:
+                return False
             await page.wait_for_timeout(TAB_SWITCH_WAIT_MS)
-            active_selectors = ["li.active", "li[class*='active']", ".active", "[class*='active']"]
+            target_code = OddsPortalSelectors.MARKET_TAB_CODES.get(market_tab_name)
+            if target_code and OddsPortalSelectors.market_code_matches(market_tab_name, page.url):
+                return True
+            active_selectors = [
+                "div[data-testid='sports-nav'] button[data-testid='sports-nav-active-tab']",
+                "li.odds-item.active",
+                "ul.odds-tabs > li.active",
+            ]
 
             for selector in active_selectors:
                 try:
@@ -209,11 +222,6 @@ class MarketTabNavigator:
                 except Exception as e:
                     self.logger.debug(f"Exception checking active selector '{selector}': {e}")
                     continue
-
-            page_content = await page.content()
-            if market_tab_name and market_tab_name.lower() in page_content.lower():
-                self.logger.info(f"Market '{market_tab_name}' found in page content")
-                return True
 
             self.logger.warning(f"Tab '{market_tab_name}' is not confirmed as active")
             return False

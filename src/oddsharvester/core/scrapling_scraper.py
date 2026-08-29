@@ -47,7 +47,16 @@ from oddsharvester.utils.proxy_manager import ProxyEntry, ProxyManager
 from oddsharvester.utils.scraper_engine import ScraperEngine
 from oddsharvester.utils.utils import clean_html_text
 
-CORE_FOOTBALL_MARKETS = {"1x2", "btts", "over_under_2_5"}
+XHR_FOOTBALL_MARKETS = {
+    "1x2",
+    "btts",
+    "double_chance",
+    "dnb",
+    "over_under_1_5",
+    "over_under_2_5",
+    "over_under_3_5",
+    "asian_handicap_-0_5",
+}
 MAX_DECODED_CACHE_ENTRIES = 256
 MAX_DECODED_CACHE_BYTES = 16 * 1024 * 1024
 EGRESS_CONSECUTIVE_FAILURE_THRESHOLD = 3
@@ -56,7 +65,12 @@ DEFAULT_EGRESS_COOLDOWN_MAX_SECONDS = 300.0
 MARKET_LABELS = {
     "1x2": ["1", "X", "2"],
     "btts": ["btts_yes", "btts_no"],
+    "double_chance": ["1X", "12", "X2"],
+    "dnb": ["dnb_team1", "dnb_team2"],
+    "over_under_1_5": ["odds_over", "odds_under"],
     "over_under_2_5": ["odds_over", "odds_under"],
+    "over_under_3_5": ["odds_over", "odds_under"],
+    "asian_handicap_-0_5": ["team1_handicap", "team2_handicap"],
 }
 ANTI_BOT_MARKERS = (
     "cf-chl-",
@@ -123,6 +137,10 @@ class ScraplingUnavailableError(RuntimeError):
     """Raised when the Scrapling fast path cannot safely satisfy a request."""
 
 
+class RequestedLeagueProvenanceError(RuntimeError):
+    """Raised when a match has invalid or conflicting requested-league ownership."""
+
+
 class StaticListingRequiresBrowserError(ScraplingUnavailableError):
     """Raised when a listing needs browser hydration for trusted link discovery."""
 
@@ -180,9 +198,7 @@ class ScraplingOddsPortalScraper:
         self._egress_half_open_inflight: set[str] = set()
         self._stealth_session = None
         self._stealth_proxy_key: str | None = None
-        self._decoded_cache: OrderedDict[
-            tuple[str, str, str], tuple[dict[str, Any], int]
-        ] = OrderedDict()
+        self._decoded_cache: OrderedDict[tuple[str, str, str], tuple[dict[str, Any], int]] = OrderedDict()
         self._decoded_cache_bytes = 0
         self._cache_hits = 0
         self._cache_misses = 0
@@ -208,6 +224,7 @@ class ScraplingOddsPortalScraper:
         bookies_filter: str = "all",
         preview_submarkets_only: bool = False,
         include_started: bool = False,
+        requested_league_by_match_link: dict[str, str] | None = None,
     ) -> ScrapeResult:
         self._validate_supported_request(
             sport=sport,
@@ -230,6 +247,7 @@ class ScraplingOddsPortalScraper:
                 max_pages=max_pages,
                 target_bookmaker=target_bookmaker,
                 include_started=include_started,
+                requested_league_by_match_link=requested_league_by_match_link,
             )
         finally:
             await self.aclose()
@@ -247,16 +265,25 @@ class ScraplingOddsPortalScraper:
         max_pages: int | None,
         target_bookmaker: str | None,
         include_started: bool,
+        requested_league_by_match_link: dict[str, str] | None = None,
     ) -> ScrapeResult:
-        links = match_links or await self._collect_links(
-            command=command,
-            sport=sport or "football",
-            date_value=date_value,
-            leagues=leagues,
-            season=season,
-            max_pages=max_pages,
-            include_started=include_started,
-        )
+        if match_links:
+            links = match_links
+            league_by_link = {
+                link: requested_league_by_match_link[link]
+                for link in links
+                if requested_league_by_match_link and link in requested_league_by_match_link
+            }
+        else:
+            links, league_by_link = await self._collect_links(
+                command=command,
+                sport=sport or "football",
+                date_value=date_value,
+                leagues=leagues,
+                season=season,
+                max_pages=max_pages,
+                include_started=include_started,
+            )
         if not links:
             return ScrapeResult(
                 stats=ScrapeStats(total_urls=0),
@@ -279,6 +306,7 @@ class ScraplingOddsPortalScraper:
                 "cache": {"status": "memory", "hits": 0, "misses": 0},
                 "xhr_decoder_revision": DECODER_REVISION,
                 "_discovered_match_links": list(links),
+                "_requested_league_by_match_link": league_by_link,
             },
         )
 
@@ -290,6 +318,9 @@ class ScraplingOddsPortalScraper:
                         markets=markets or ["1x2"],
                         target_bookmaker=target_bookmaker,
                     )
+                    requested_league = league_by_link.get(link)
+                    if requested_league is not None:
+                        record["requested_league_slug"] = requested_league
                     return record, None
                 except (
                     OddsPortalXHRDecodeError,
@@ -348,9 +379,9 @@ class ScraplingOddsPortalScraper:
             raise ScraplingUnavailableError("Scrapling fast path v1 supports the all-bookies filter only")
         if preview_submarkets_only:
             raise ScraplingUnavailableError("Scrapling fast path v1 does not support preview-only markets")
-        if not requested_markets.issubset(CORE_FOOTBALL_MARKETS):
+        if not requested_markets.issubset(XHR_FOOTBALL_MARKETS):
             raise ScraplingUnavailableError(
-                f"Scrapling fast path v1 supports only core markets: {sorted(CORE_FOOTBALL_MARKETS)}"
+                f"Scrapling XHR path supports only these football markets: {sorted(XHR_FOOTBALL_MARKETS)}"
             )
 
     async def _collect_links(
@@ -363,7 +394,7 @@ class ScraplingOddsPortalScraper:
         season: str | None,
         max_pages: int | None,
         include_started: bool = False,
-    ) -> list[str]:
+    ) -> tuple[list[str], dict[str, str]]:
         target_leagues = leagues or [None]
         listing_semaphore = asyncio.Semaphore(max(1, min(self.concurrency_tasks, len(target_leagues))))
 
@@ -398,13 +429,21 @@ class ScraplingOddsPortalScraper:
 
         batches = await asyncio.gather(*(collect_for_league(league) for league in target_leagues))
         collected: list[str] = []
-        seen: set[str] = set()
-        for discovered in batches:
+        league_by_link: dict[str, str] = {}
+        owners: dict[str, str | None] = {}
+        ambiguous: set[str] = set()
+        for league, discovered in zip(target_leagues, batches, strict=True):
             for link in discovered:
-                if link not in seen:
-                    seen.add(link)
+                if link not in owners:
+                    owners[link] = league
                     collected.append(link)
-        return collected
+                    if league is not None:
+                        league_by_link[link] = league
+                elif owners[link] != league:
+                    ambiguous.add(link)
+        if ambiguous:
+            raise RequestedLeagueProvenanceError("Requested league provenance is invalid")
+        return collected, league_by_link
 
     async def _collect_listing_xhr(
         self,
@@ -465,9 +504,7 @@ class ScraplingOddsPortalScraper:
         if current_page != 1:
             raise OddsPortalXHRSchemaError("OddsPortal listing first response is not page 1")
         if not rows and total != 0:
-            raise OddsPortalXHRSchemaError(
-                "OddsPortal empty listing payload does not attest total=0"
-            )
+            raise OddsPortalXHRSchemaError("OddsPortal empty listing payload does not attest total=0")
         page_limit = min(page_count, max_pages) if max_pages else page_count
         all_rows = list(rows)
         for page in range(2, page_limit + 1):
@@ -484,10 +521,7 @@ class ScraplingOddsPortalScraper:
                 raise OddsPortalXHRSchemaError("OddsPortal listing pagination response is inconsistent")
             all_rows.extend(page_rows)
 
-        identities = [
-            str(row.get("id") or row.get("url") or "")
-            for row in all_rows
-        ]
+        identities = [str(row.get("id") or row.get("url") or "") for row in all_rows]
         if any(not identity for identity in identities) or len(set(identities)) != len(identities):
             raise OddsPortalXHRSchemaError("OddsPortal listing pagination contains duplicate rows")
         expected_rows = min(total, one_page * page_limit)
@@ -502,9 +536,7 @@ class ScraplingOddsPortalScraper:
             if date_filter is not None:
                 row_date = _listing_row_date(row, self.timezone_id)
                 if row_date is None:
-                    raise OddsPortalXHRSchemaError(
-                        "OddsPortal listing row does not expose a parseable start timestamp"
-                    )
+                    raise OddsPortalXHRSchemaError("OddsPortal listing row does not expose a parseable start timestamp")
                 if row_date != date_filter:
                     continue
             href = row.get("url")
@@ -642,15 +674,12 @@ class ScraplingOddsPortalScraper:
         elif self._stealth_proxy_key is not None:
             self._report_proxy_result(self._stealth_proxy_key, is_proxy_failure=False)
         payload = decode_xhr_payload(raw_payload)
-        payload_size = len(
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        )
+        payload_size = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         self._decoded_cache[cache_key] = (payload, payload_size)
         self._decoded_cache_bytes += payload_size
         self._decoded_cache.move_to_end(cache_key)
         while (
-            len(self._decoded_cache) > MAX_DECODED_CACHE_ENTRIES
-            or self._decoded_cache_bytes > MAX_DECODED_CACHE_BYTES
+            len(self._decoded_cache) > MAX_DECODED_CACHE_ENTRIES or self._decoded_cache_bytes > MAX_DECODED_CACHE_BYTES
         ):
             _, (_, evicted_size) = self._decoded_cache.popitem(last=False)
             self._decoded_cache_bytes -= evicted_size
@@ -811,9 +840,7 @@ class ScraplingOddsPortalScraper:
             session_manager = FetcherSession(**kwargs)
             session = session_manager.__enter__()
             self._http_sessions.append(session_manager)
-            self._http_session_pools[entry.key].put_nowait(
-                _HTTPSessionLease(client=session, proxy_key=entry.key)
-            )
+            self._http_session_pools[entry.key].put_nowait(_HTTPSessionLease(client=session, proxy_key=entry.key))
 
     async def aclose(self) -> None:
         stealth_session = self._stealth_session
@@ -889,16 +916,10 @@ class ScraplingOddsPortalScraper:
                 raise ScraplingUnavailableError("Scrapling session is not open")
             stealth_key = self._stealth_proxy_key or "direct"
             half_open_probe = await self._pace(stealth_key)
-            if (
-                self._is_egress_unhealthy(
-                    stealth_key,
-                    allow_half_open_probe=half_open_probe,
-                )
-                or (
-                    self.proxy_manager is not None
-                    and self.proxy_manager.is_blacklisted(stealth_key)
-                )
-            ):
+            if self._is_egress_unhealthy(
+                stealth_key,
+                allow_half_open_probe=half_open_probe,
+            ) or (self.proxy_manager is not None and self.proxy_manager.is_blacklisted(stealth_key)):
                 raise ScraplingProxyError("Stealth proxy is unhealthy; falling back to the browser engine")
             try:
                 response = await self._stealth_session.fetch(url)
@@ -950,8 +971,7 @@ class ScraplingOddsPortalScraper:
                 await asyncio.sleep(wait_for)
             now = time.monotonic()
             if (
-                self._egress_failures.get(proxy_key, 0)
-                >= EGRESS_CONSECUTIVE_FAILURE_THRESHOLD
+                self._egress_failures.get(proxy_key, 0) >= EGRESS_CONSECUTIVE_FAILURE_THRESHOLD
                 and self._egress_cooldown_until.get(proxy_key, 0) <= now
                 and proxy_key not in self._egress_half_open_inflight
             ):
@@ -991,13 +1011,8 @@ class ScraplingOddsPortalScraper:
         *,
         allow_half_open_probe: bool = False,
     ) -> bool:
-        return (
-            self._egress_failures.get(proxy_key, 0)
-            >= EGRESS_CONSECUTIVE_FAILURE_THRESHOLD
-            or (
-                proxy_key in self._egress_half_open_inflight
-                and not allow_half_open_probe
-            )
+        return self._egress_failures.get(proxy_key, 0) >= EGRESS_CONSECUTIVE_FAILURE_THRESHOLD or (
+            proxy_key in self._egress_half_open_inflight and not allow_half_open_probe
         )
 
     def _egress_metadata(self) -> dict[str, Any]:
@@ -1013,8 +1028,7 @@ class ScraplingOddsPortalScraper:
             "max_consecutive_failures": max(self._egress_failures.values(), default=0),
             "cooldown_remaining_seconds": round(cooldown_remaining, 3),
             "open_circuits": sum(
-                failures >= EGRESS_CONSECUTIVE_FAILURE_THRESHOLD
-                for failures in self._egress_failures.values()
+                failures >= EGRESS_CONSECUTIVE_FAILURE_THRESHOLD for failures in self._egress_failures.values()
             ),
         }
 

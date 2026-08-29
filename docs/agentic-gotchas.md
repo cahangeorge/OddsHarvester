@@ -690,10 +690,20 @@ the match is real and upcoming, just filed under the next calendar day.
 - There is no "competition-local date" the scraper can infer — the user
   expresses intent with `--timezone`. Don't try to guess it per league.
 
+### Detail extraction must confirm the requested local date
+
+The listing/header filter is only an early filter. In August 2026 a Denmark
+Superliga league request for 23 August discovered links whose extracted detail
+records belonged to 30 August. Keep the header filter to avoid unnecessary
+traffic, then fail closed after extraction by converting each emitted
+`match_date` to the browser timezone and comparing its local calendar date with
+the requested date. Missing or unparseable detail dates are not safe to emit.
+
 ### References
 
 - `core/playwright_manager.py` — effective-timezone resolution.
 - `base_scraper._parse_date_header` / `_resolved_browser_timezone`.
+- `odds_portal_scraper._filter_upcoming_date_scope` — authoritative emitted-record guard.
 - GitHub issue #58 follow-up.
 
 ---
@@ -838,6 +848,10 @@ half-open probe. A successful response resets the backoff.
   bounded alternate-proxy failover for HTTP, provider/bounded-cache reuse,
   and browser fallback on contract drift. Stealth uses one sticky proxy and
   fails over to the browser rather than silently leaking to direct egress.
+- The structured football path covers the analysis set with the live betting
+  type IDs: 1X2=`1`, totals=`2`, Double Chance=`4`, Asian Handicap=`5`,
+  Draw No Bet=`6`, and BTTS=`13`. Totals 1.5/2.5/3.5 and AH -0.5 are selected
+  by exact normalized `handicapValue`; never take the first row in the payload.
 - With no proxy, `OH_XHR_COOLDOWN_BASE` and `OH_XHR_COOLDOWN_MAX` bound the
   direct-IP exponential cooldown. `scraper_app.py` honors the remaining
   cooldown before moving from HTTP to stealth/browser and before Camoufox
@@ -847,6 +861,61 @@ half-open probe. A successful response resets the backoff.
 - Refresh the decoder only from a freshly captured public bundle and add
   fixture tests for plain/gzip envelopes plus live canaries for listing,
   provider mapping, and every supported market.
+
+---
+
+## §14 — Listing rows may be identified by `data-testid`, not `eventRow`
+
+**Severity:** High — live league pages can visibly contain fixtures while the
+scraper truthfully reports zero parsed rows and therefore emits a false
+`no_fixtures` attestation.
+
+OddsPortal's August 2026 listing DOM replaced the legacy `eventRow*` class with
+`data-testid="game-row"`. The corresponding `date-header` is no longer nested
+inside the first row; it is a sibling header inside the same date-group
+container. Discovery must prefer the stable `game-row` test id, retain the
+legacy class fallback for replay fixtures, and resolve the nearest enclosing
+date-group header before applying an exact-date filter.
+
+**Detection signal:** Playwright visibly shows fixtures and H2H links, but logs
+say `Found 0 event rows`, `match_link_count` is zero, and the run reports
+`no_fixtures` without browser or extraction attempts.
+
+---
+
+## §15 — Market tabs moved under `sports-nav`; “More” is not a button
+
+**Severity:** High — the default markets still scrape, while overflow markets
+silently remain empty and can make a superficially successful run incomplete.
+
+The August 2026 match page exposes market tabs as
+`button[data-testid="sports-nav-active-tab"]` and
+`button[data-testid="sports-nav-inactive-tab"]` inside
+`div[data-testid="sports-nav"]`. The overflow control is a clickable `div`
+containing `img[alt="arrow"]`; it is not the old
+`button[data-testid="more-button"]`, and its visible “More” label is localized.
+Hidden overflow tab buttons remain in the DOM, so finding a market label in the
+whole page is not proof that the tab became active.
+
+Expanded totals and handicap lines are now clickable table rows. Their visible
+desktop label is in the first cell's `span[class~="max-sm:hidden"]`; the old
+`div...font-bold p` selector no longer exists. Match the exact signed tail
+(`+1.5`, `+2.5`, `+3.5`, `-0.5`) and click the closest row, while retaining the
+old selector as a replay-fixture fallback.
+
+Prefer the scoped `data-testid` selectors, keep legacy selectors only as
+fallbacks, open overflow structurally rather than by translated text, and
+verify activation from the stable URL-fragment market code or the active-tab
+test id. Current `.com` fragments are compact (`O/U`, `AH`, `BTS`, `DC`,
+`DNB`); localized/legacy mirrors may still emit `over-under`, `ah`, `bts`,
+`double`, and `dnb`, so accept the explicit bounded alias set rather than one
+literal code. The CLI report must also mark a run partial when a requested
+`<market>_market` collection is empty; record-level success alone is not market
+coverage.
+
+**Detection signal:** 1X2/BTTS/Double Chance contain bookmaker rows but DNB,
+totals, or Asian Handicap are empty; logs mention a missing More button; or an
+active-tab check succeeds merely because the hidden label exists in HTML.
 
 ---
 

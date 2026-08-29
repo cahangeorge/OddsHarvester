@@ -57,6 +57,8 @@ SPORTS_LEAGUES_URLS_MAPPING = {
         "conference-league": "https://www.oddsportal.com/football/europe/conference-league/",
         "poland-ekstraklasa": "https://www.oddsportal.com/football/poland/ekstraklasa/",
         "finland-veikkausliiga": "https://www.oddsportal.com/football/finland/veikkausliiga/",
+        "norway-eliteserien": "https://www.oddsportal.com/football/norway/eliteserien/",
+        "sweden-allsvenskan": "https://www.oddsportal.com/football/sweden/allsvenskan/",
         "copa-sudamericana": "https://www.oddsportal.com/football/south-america/copa-sudamericana",
         "copa-libertadores": "https://www.oddsportal.com/football/south-america/copa-libertadores",
         "morocco-botola-pro": "https://www.oddsportal.com/football/morocco/botola-pro",

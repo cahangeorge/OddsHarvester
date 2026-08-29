@@ -93,6 +93,11 @@ class TestVolleyballLeagueConstants:
 class TestFootballLeagueConstants:
     """Guards production football mappings that intentionally keep stable CLI slugs."""
 
+    def test_combined_history_future_nordic_leagues(self, fresh_mapping):
+        football = fresh_mapping[Sport.FOOTBALL]
+        assert football["norway-eliteserien"] == "https://www.oddsportal.com/football/norway/eliteserien/"
+        assert football["sweden-allsvenskan"] == "https://www.oddsportal.com/football/sweden/allsvenskan/"
+
     def test_world_cup_url_tracks_current_world_championship_slug(self, fresh_mapping):
         # OddsPortal renamed the current tournament page to `world-championship-2026`
         # while our public/API slug remains `world-cup`.

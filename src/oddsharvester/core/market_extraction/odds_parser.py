@@ -48,6 +48,16 @@ class OddsParser:
         self.logger.info("Parsing odds from HTML content.")
         soup = BeautifulSoup(html_content, "html.parser")
 
+        # Current OddsPortal (August 2026) renders comparison data as semantic
+        # table rows rather than the former flex ``div`` rows.  Prefer the
+        # stable data-testid contract so unrelated ``game-row`` elements from
+        # H2H/previous-match sections cannot be mistaken for bookmakers.
+        current_rows = soup.select(
+            "tr:has([data-testid='outrights-expanded-bookmaker-name']):has([data-testid='odd-container'])"
+        )
+        if current_rows:
+            return self._parse_current_table_rows(current_rows, period, odds_labels, target_bookmaker)
+
         # Scope to the bookmaker table container if present — its parent holds only
         # the real bookmaker rows. Without scoping, peripheral sections
         # (Previous Matches, H2H) leak in: their rows share `border-black-borders`
@@ -93,6 +103,39 @@ class OddsParser:
             except Exception as e:
                 self.logger.error(f"Error parsing odds: {e}")
                 continue
+
+        self.logger.info(f"Successfully parsed odds for {len(odds_data)} bookmakers.")
+        return odds_data
+
+    def _parse_current_table_rows(
+        self,
+        rows: list[Tag],
+        period: str,
+        odds_labels: list[str],
+        target_bookmaker: str | None,
+    ) -> list[dict[str, Any]]:
+        """Parse the current semantic bookmaker table."""
+        odds_data: list[dict[str, Any]] = []
+        for row in rows:
+            name_element = row.select_one("[data-testid='outrights-expanded-bookmaker-name']")
+            bookmaker_name = name_element.get_text(strip=True) if name_element else None
+            if not bookmaker_name or (
+                target_bookmaker and bookmaker_name.lower() != target_bookmaker.lower()
+            ):
+                continue
+
+            odds_blocks = row.select("[data-testid='odd-container']")
+            if len(odds_blocks) < len(odds_labels):
+                self.logger.warning(f"Incomplete odds data for bookmaker: {bookmaker_name}. Skipping...")
+                continue
+
+            extracted_odds = {
+                label: re.sub(r"(\d+\.\d+)\1", r"\1", odds_blocks[index].get_text(strip=True))
+                for index, label in enumerate(odds_labels)
+            }
+            extracted_odds["bookmaker_name"] = bookmaker_name
+            extracted_odds["period"] = period
+            odds_data.append(extracted_odds)
 
         self.logger.info(f"Successfully parsed odds for {len(odds_data)} bookmakers.")
         return odds_data
